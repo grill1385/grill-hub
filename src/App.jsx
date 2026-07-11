@@ -711,7 +711,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                 </div>
               ))}
             </div>
-            <div className="todo-panel2" style={{ marginTop: 14 }}>
+            <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
               {myMember && myDebts.length === 0 && <p className="hint">Sem contas por saldar.</p>}
@@ -1614,8 +1614,10 @@ function Style() {
       .tl-row.slide-past .tl-center .tl-card:nth-child(2), .tl-row.slide-future .tl-center .tl-card:nth-child(2) { animation-delay:.12s; }
       .tl-row.slide-past .tl-center .tl-card:nth-child(3), .tl-row.slide-future .tl-center .tl-card:nth-child(3) { animation-delay:.18s; }
       .tl-row.slide-past .tl-right .tl-card, .tl-row.slide-future .tl-right .tl-card { animation-delay:.24s; }
-      .todo-panel2 { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; height:100%;
+      .tl-right { display:flex; flex-direction:column; gap:14px; }
+      .todo-panel2 { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px;
         box-shadow:0 10px 28px rgba(0,0,0,.3); }
+      .tl-right .todo-panel2:only-child { flex:1; }
       .podium { display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; }
       .podium-card { display:flex; flex-direction:column; align-items:center; gap:9px; background:var(--surface);
         border:1px solid var(--line); border-radius:14px; padding:18px 14px; cursor:pointer; font:inherit; color:var(--text);
@@ -1660,7 +1662,18 @@ function Style() {
         .tl-row { grid-template-columns:1fr; }
         .tl-center { grid-template-columns:1fr; }
         .tl-arrows { opacity:1; pointer-events:auto; position:static; margin-top:8px; }
-        .podium { grid-template-columns:1fr 1fr; }
+        .tl-card { min-height:0; }
+        .podium { grid-template-columns:1fr 1fr; gap:10px; }
+        .podium-card { padding:14px 10px; }
+        .userchip { display:none; }
+        h1 { font-size:22px; }
+        .logo-img { width:30px; height:30px; }
+        .topbar { padding:10px 12px; }
+        input, select, textarea { font-size:16px; }
+        .purchase-head { flex-wrap:wrap; }
+        .shares-grid { grid-template-columns:1fr 1fr; }
+        .modal { max-height:92vh; }
+        .actions { flex-wrap:wrap; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
     `}</style>
