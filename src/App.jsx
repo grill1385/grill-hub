@@ -23,6 +23,11 @@ function fmtDate(iso) {
 
 const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} €`;
 
+const shareOf = (pu, mid) =>
+  pu.split === "custom"
+    ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
+    : (pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0);
+
 function eventEndDate(ev) {
   return ev.dateEnd || ev.dateStart;
 }
@@ -88,7 +93,7 @@ export default function App() {
   const myMember = data?.members?.find((m) => (m.email || "").toLowerCase() === myEmail) || null;
   const avatarSrc = myMember?.avatarUrl || session?.user?.user_metadata?.avatar_url || null;
   const pendingProfiles = isAdmin
-    ? (data?.profiles || []).filter((pr) => !data.members.some((m) => (m.email || "").toLowerCase() === pr.email))
+    ? (data?.profiles || []).filter((pr) => !pr.dismissed && !data.members.some((m) => (m.email || "").toLowerCase() === pr.email))
     : [];
 
   /* ---------- Carregar dados e sessão ---------- */
@@ -322,6 +327,14 @@ export default function App() {
     } catch { showToast("Não foi possível atualizar."); }
   }
 
+  async function dismissProfile(id) {
+    try {
+      await api.dismissProfile(id);
+      setData({ ...data, profiles: data.profiles.map((p) => (p.id === id ? { ...p, dismissed: true } : p)) });
+      showToast("Conta marcada como não-membro.");
+    } catch { showToast("Não foi possível atualizar."); }
+  }
+
   async function linkAccount(memberId, email) {
     const member = data.members.find((m) => m.id === memberId);
     if (!member) return;
@@ -393,6 +406,7 @@ export default function App() {
         <main className={`content ${tab === "home" ? "wide" : ""}`}>
           {tab === "home" && (
             <HomeTab events={sortedEventsAsc} scoreboard={scoreboard} myMember={myMember}
+              purchases={data.purchases} members={data.members}
               onOpenEvent={(id) => setModal({ type: "eventDetail", id })}
               onMember={(id) => setModal({ type: "memberDetail", id })}
               onConfirm={toggleConfirmation}
@@ -523,7 +537,7 @@ export default function App() {
 
           {tab === "admin" && isAdmin && (
             <AdminPanel admins={data.admins} isMain={isMain} pendingProfiles={pendingProfiles}
-              members={data.members} onLink={linkAccount}
+              members={data.members} onLink={linkAccount} onDismiss={dismissProfile}
               onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin} />
           )}
         </main>
@@ -592,7 +606,24 @@ export default function App() {
    Componentes
    ============================================================ */
 
-function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfirm, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onGoScoreboard }) {
+  const myDebts = useMemo(() => {
+    if (!myMember) return [];
+    const items = [];
+    (purchases || []).forEach((pu) => {
+      if (!pu.participants?.includes(myMember.id)) return;
+      if (pu.payerId === myMember.id || pu.settled?.[myMember.id]) return;
+      const amount = shareOf(pu, myMember.id);
+      if (amount <= 0) return;
+      const ev = events.find((e) => e.id === pu.eventId);
+      items.push({
+        id: pu.id, eventId: pu.eventId, eventName: ev?.name || "?",
+        desc: pu.description, amount,
+        payer: members.find((m) => m.id === pu.payerId)?.name || "?",
+      });
+    });
+    return items;
+  }, [purchases, events, members, myMember]);
   const anchor = useMemo(() => {
     let a = -1;
     events.forEach((e, i) => { if (getStatus(e) === "Concluído") a = i; });
@@ -667,6 +698,7 @@ function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfir
         </div>
         <div className="tl-slot tl-right">
           {k === 0 ? (
+            <>
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Futuros eventos</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para confirmares presenças.</p>}
@@ -679,6 +711,19 @@ function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfir
                 </div>
               ))}
             </div>
+            <div className="todo-panel2" style={{ marginTop: 14 }}>
+              <h4 style={{ marginTop: 0 }}>Contas</h4>
+              {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
+              {myMember && myDebts.length === 0 && <p className="hint">Sem contas por saldar.</p>}
+              {myMember && myDebts.map((d) => (
+                <div key={d.id} className="todo-item">
+                  <button className="todo-name" onClick={() => onOpenEvent(d.eventId)}>{d.eventName}</button>
+                  <span className="mini-date">{d.desc}</span>
+                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.payer}</b></span>
+                </div>
+              ))}
+            </div>
+            </>
           ) : (
             rightEv ? card(rightEv, 2) : <div className="tl-card empty-card" />
           )}
@@ -878,10 +923,8 @@ function NewPasswordModal({ onClose, onDone }) {
 function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
   const owing = {};
   (purchases || []).forEach((pu) => {
-    const parts = pu.participants || [];
-    const share = parts.length ? Math.round((pu.total / parts.length) * 100) / 100 : 0;
-    parts.forEach((mid) => {
-      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + share;
+    (pu.participants || []).forEach((mid) => {
+      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
     });
   });
   const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
@@ -949,9 +992,8 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
       {(!purchases || purchases.length === 0) && <p className="hint">Sem contas.</p>}
       {(purchases || []).map((pu) => {
         const parts = pu.participants || [];
-        const share = parts.length ? Math.round((pu.total / parts.length) * 100) / 100 : 0;
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
-        const totalSettled = Math.min(pu.total, Math.round(share * parts.filter(isSet).length * 100) / 100);
+        const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
         const payer = members.find((m) => m.id === pu.payerId);
         return (
           <div key={pu.id} className="purchase">
@@ -961,7 +1003,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
               {isAdmin && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {eur(share)} por pessoa · saldado {eur(totalSettled)} de {eur(pu.total)}
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}
             </div>
             <div className="pill-row">
               {parts.map((mid) => {
@@ -972,7 +1014,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
                   <button key={mid} className={`pill ${done ? "on" : ""}`}
                     title={mid === pu.payerId ? "Pagou a compra" : isAdmin ? "Alternar saldado" : ""}
                     onClick={() => isAdmin && mid !== pu.payerId && onToggleSettled(pu, mid)}>
-                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(share)}`}
+                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(shareOf(pu, mid))}`}
                   </button>
                 );
               })}
@@ -1152,6 +1194,8 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
     participants: defaultParts,
     settled: { ...(purchase?.settled || {}) },
     receipts: [...(purchase?.receipts || [])],
+    split: purchase?.split || "equal",
+    shares: { ...(purchase?.shares || {}) },
   }));
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -1160,9 +1204,12 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
     set("participants", f.participants.includes(id) ? f.participants.filter((x) => x !== id) : [...f.participants, id]);
   const share = f.participants.length && Number(f.total) > 0
     ? Math.round((Number(f.total) / f.participants.length) * 100) / 100 : 0;
+  const sumShares = Math.round(f.participants.reduce((acc, id) => acc + (Number(f.shares[id]) || 0), 0) * 100) / 100;
+  const sumOk = Math.abs(sumShares - (Number(f.total) || 0)) < 0.005;
 
   async function submit() {
     if (!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length) return;
+    if (f.split === "custom" && !sumOk) return;
     setBusy(true);
     try {
       let receipts = f.receipts;
@@ -1175,6 +1222,10 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
         id: f.id, eventId: ev.id, description: f.description.trim(),
         total: Math.round(Number(f.total) * 100) / 100,
         payerId: f.payerId, participants: f.participants, settled: f.settled, receipts,
+        split: f.split,
+        shares: f.split === "custom"
+          ? Object.fromEntries(f.participants.map((id) => [id, Math.round((Number(f.shares[id]) || 0) * 100) / 100]))
+          : {},
       });
     } catch { setBusy(false); }
   }
@@ -1190,19 +1241,43 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
           </select>
         </label>
       </div>
-      <h4>Dividir por {f.participants.length} pessoa(s){share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
+      <label>Divisão
+        <div className="segmented">
+          <button type="button" className={f.split === "equal" ? "on" : ""} onClick={() => set("split", "equal")}>Divisão por todos</button>
+          <button type="button" className={f.split === "custom" ? "on" : ""} onClick={() => set("split", "custom")}>Só pago o que como</button>
+        </div>
+      </label>
+      <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
       <div className="pill-row">
         {members.map((m) => (
           <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
         ))}
       </div>
+      {f.split === "custom" && (
+        <>
+          <div className="shares-grid">
+            {f.participants.map((id) => {
+              const m = members.find((x) => x.id === id);
+              return (
+                <label key={id}>{m?.name || id} (€)
+                  <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
+                    onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
+                </label>
+              );
+            })}
+          </div>
+          {!sumOk && (
+            <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+          )}
+        </>
+      )}
       <label style={{ marginTop: 14 }}>Fotos da fatura (opcional)
         <input type="file" accept="image/*" multiple onChange={(e) => setFiles([...e.target.files])} />
       </label>
       {f.receipts.length > 0 && <p className="hint">{f.receipts.length} foto(s) já carregada(s).</p>}
       <div className="actions">
         {editing && <button className="btn danger" disabled={busy} onClick={() => onDelete(purchase)}>Eliminar</button>}
-        <button className="btn ember" disabled={busy} onClick={submit}>{busy ? "A carregar…" : "Guardar compra"}</button>
+        <button className="btn ember" disabled={busy || (f.split === "custom" && !sumOk)} onClick={submit}>{busy ? "A carregar…" : "Guardar compra"}</button>
       </div>
     </Modal>
   );
@@ -1246,7 +1321,7 @@ function RoleFormModal({ roles, role, onSave, onDelete, onClose }) {
   );
 }
 
-function LinkRow({ profile, members, onLink }) {
+function LinkRow({ profile, members, onLink, onDismiss }) {
   const [mid, setMid] = useState("");
   const blanks = members.filter((m) => !m.email);
   return (
@@ -1258,12 +1333,13 @@ function LinkRow({ profile, members, onLink }) {
           {blanks.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
         <button className="btn ghost small" disabled={!mid} onClick={() => onLink(mid, profile.email)}>Associar</button>
+        <button className="btn ghost small" title="Esta conta não corresponde a nenhum membro (ex.: conta de admin)" onClick={() => onDismiss(profile.id)}>Não associar</button>
       </span>
     </div>
   );
 }
 
-function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onAddAdmin, onRemoveAdmin }) {
+function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   return (
     <section>
@@ -1275,7 +1351,7 @@ function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onAddAdm
         <p className="hint">Há contas novas mas nenhum membro sem email — cria o membro primeiro ou edita o email de um existente.</p>
       )}
       <div className="mini-list">
-        {pendingProfiles.map((pr) => <LinkRow key={pr.id} profile={pr} members={members} onLink={onLink} />)}
+        {pendingProfiles.map((pr) => <LinkRow key={pr.id} profile={pr} members={members} onLink={onLink} onDismiss={onDismiss} />)}
       </div>
       <p className="hint">Podes corrigir associações a qualquer momento editando o email do membro no separador Membros.</p>
 
@@ -1559,6 +1635,9 @@ function Style() {
       .receipts img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
       .receipts a:hover img { border-color:var(--ember); }
       input[type="file"] { padding:7px; }
+      .shares-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px 12px; margin-top:10px; }
+      .debt-line { font-size:12.5px; color:var(--muted); }
+      .debt-line b { color:var(--ember); }
 
       @media (max-width: 760px) {
         .layout { flex-direction:column; }

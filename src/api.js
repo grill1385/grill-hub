@@ -38,11 +38,13 @@ const toPurchase = (r) => ({
   id: r.id, eventId: r.event_id, description: r.description, total: Number(r.total),
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, receipts: r.receipts || [],
+  split: r.split || "equal", shares: r.shares || {},
 });
 const fromPurchase = (p) => ({
   id: p.id, event_id: p.eventId, description: p.description, total: p.total,
   payer_member_id: p.payerId || null, participants: p.participants || [],
   settled: p.settled || {}, receipts: p.receipts || [],
+  split: p.split || "equal", shares: p.shares || {},
 });
 
 export const api = {
@@ -81,6 +83,10 @@ export const api = {
   },
   async setMyConfirmation(eventId, value) {
     const { error } = await supabase.rpc("set_my_confirmation", { p_event_id: eventId, p_value: value });
+    if (error) throw error;
+  },
+  async dismissProfile(id) {
+    const { error } = await supabase.from("profiles").update({ dismissed: true }).eq("id", id);
     if (error) throw error;
   },
   async savePurchase(pu) { const { error } = await supabase.from("purchases").upsert(fromPurchase(pu)); if (error) throw error; },

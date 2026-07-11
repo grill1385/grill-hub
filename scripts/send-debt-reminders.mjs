@@ -37,9 +37,12 @@ for (const pu of purchases) {
   if (d < 3 || (d - 3) % 7 !== 0) continue; // 3 dias depois, e depois semanalmente
   const parts = pu.participants || [];
   if (!parts.length) continue;
-  const share = Math.round((Number(pu.total) / parts.length) * 100) / 100;
   for (const mid of parts) {
     if (mid === pu.payer_member_id || pu.settled?.[mid]) continue;
+    const share = pu.split === "custom"
+      ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
+      : Math.round((Number(pu.total) / parts.length) * 100) / 100;
+    if (share <= 0) continue;
     (debts[mid] = debts[mid] || []).push({
       eventName: ev.name, desc: pu.description, amount: share,
       payerName: mem[pu.payer_member_id]?.name || "?",
