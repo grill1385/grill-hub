@@ -1,0 +1,16 @@
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: "0 9 * * 1,4"   # segundas e quintas às 09:00 UTC
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ler tabela kv (mantém o projeto ativo)
+        run: |
+          curl -sf "https://noperkfdcdairrpnomrs.supabase.co/rest/v1/kv?select=key&limit=1" \
+            -H "apikey: sb_publishable_9IyQdSmI1GviEx83KqtCvw_gxMd-cnl" \
+            -H "Authorization: Bearer sb_publishable_9IyQdSmI1GviEx83KqtCvw_gxMd-cnl"
