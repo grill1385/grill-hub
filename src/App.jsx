@@ -7,6 +7,7 @@ import React, { useState, useEffect, useMemo } from "react";
    - Dados em tabelas Supabase com RLS (ver src/api.js)
    ============================================================ */
 import { api, supabase } from "./api.js";
+import * as XLSX from "xlsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -22,6 +23,8 @@ function fmtDate(iso) {
 }
 
 const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} €`;
+
+const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 
 const shareOf = (pu, mid) =>
   pu.split === "custom"
@@ -327,6 +330,31 @@ export default function App() {
     } catch { showToast("Não foi possível atualizar."); }
   }
 
+  async function importEvents(parsedEvents, newMemberNames) {
+    try {
+      const nameToId = {};
+      data.members.forEach((m) => (nameToId[norm(m.name)] = m.id));
+      const created = newMemberNames.map((nm) => ({
+        id: uid(), name: nm, email: null, birthDate: null, joinDate: null, roleId: null, username: null, avatarUrl: null,
+      }));
+      created.forEach((m) => (nameToId[norm(m.name)] = m.id));
+      if (created.length) await api.saveMembers(created);
+      const evs = parsedEvents.map((pe) => {
+        const presences = {};
+        pe.memberNames.forEach((nm) => { const id = nameToId[norm(nm)]; if (id) presences[id] = true; });
+        return {
+          id: uid(), name: pe.name, dateStart: pe.dateStart, dateEnd: pe.dateEnd || null,
+          description: pe.description || "", location: pe.location || "", locationUrl: pe.locationUrl || "",
+          status: pe.status, presences, confirmations: {},
+        };
+      });
+      await api.saveEvents(evs);
+      setData({ ...data, members: [...data.members, ...created], events: [...data.events, ...evs] });
+      setModal(null);
+      showToast(`${evs.length} evento(s) importado(s)${created.length ? `, ${created.length} membro(s) criado(s)` : ""}.`);
+    } catch { showToast("A importação falhou. Verifica o ficheiro e tenta de novo."); }
+  }
+
   async function dismissProfile(id) {
     try {
       await api.dismissProfile(id);
@@ -422,6 +450,7 @@ export default function App() {
                     <button className={eventView === "lista" ? "on" : ""} onClick={() => setEventView("lista")}>Lista</button>
                     <button className={eventView === "timeline" ? "on" : ""} onClick={() => setEventView("timeline")}>Friso temporal</button>
                   </div>
+                  {isAdmin && <button className="btn ghost" onClick={() => setModal({ type: "importEvents" })}>Importar Excel</button>}
                   {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "eventForm" })}>+ Evento</button>}
                 </div>
               </div>
@@ -581,6 +610,10 @@ export default function App() {
       {modal?.type === "memberForm" && (
         <MemberFormModal mb={data.members.find((m) => m.id === modal.id)} roles={data.roles}
           onSave={upsertMember} onDelete={deleteMember} onClose={() => setModal(null)} />
+      )}
+
+      {modal?.type === "importEvents" && (
+        <ImportEventsModal members={data.members} onImport={importEvents} onClose={() => setModal(null)} />
       )}
 
       {modal?.type === "purchaseForm" && (() => {
@@ -1169,6 +1202,109 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
         <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...(mb || {}), ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null })}>Guardar membro</button>
+      </div>
+    </Modal>
+  );
+}
+
+function ImportEventsModal({ members, onImport, onClose }) {
+  const [preview, setPreview] = useState(null); // {events, newNames, errors}
+  const [createMissing, setCreateMissing] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  function toISO(v) {
+    if (v instanceof Date && !isNaN(v)) {
+      const off = new Date(v.getTime() - v.getTimezoneOffset() * 60000);
+      return off.toISOString().slice(0, 10);
+    }
+    const t = String(v || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return t;
+    const m = t.match(/^(\d{1,2})[\/\-.](\d{1,2})[\/\-.](\d{4})$/);
+    if (m) return `${m[3]}-${m[2].padStart(2, "0")}-${m[1].padStart(2, "0")}`;
+    return null;
+  }
+
+  async function parseFile(file) {
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
+      const sheetName = wb.SheetNames.find((n) => norm(n) === "eventos") || wb.SheetNames[0];
+      const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      const known = new Set(members.map((m) => norm(m.name)));
+      const events = []; const errors = []; const newNames = new Map();
+      raw.forEach((row, i) => {
+        const get = (...keys) => {
+          for (const k of Object.keys(row)) if (keys.includes(norm(k))) return row[k];
+          return "";
+        };
+        const name = String(get("nome", "evento", "nome do evento") || "").trim();
+        const isExample = i === 0 && name === "Churrasco de Verão";
+        if (isExample) return;
+        const dateStart = toISO(get("data inicio", "data início", "data", "inicio"));
+        const dateEnd = toISO(get("data fim", "fim"));
+        const memberNames = String(get("membros", "presencas", "presenças") || "")
+          .split(/[;,]/).map((x) => x.trim()).filter(Boolean);
+        if (!name && !dateStart && !memberNames.length) return; // linha vazia
+        const linha = i + 2;
+        if (!name) { errors.push(`Linha ${linha}: falta o nome do evento.`); return; }
+        if (!dateStart) { errors.push(`Linha ${linha} (${name}): data de início inválida ou em falta.`); return; }
+        if (!memberNames.length) { errors.push(`Linha ${linha} (${name}): pelo menos 1 membro.`); return; }
+        memberNames.forEach((nm) => { if (!known.has(norm(nm)) && !newNames.has(norm(nm))) newNames.set(norm(nm), nm); });
+        let status = String(get("estado") || "").trim();
+        if (!["Por planear", "Agendado", "Concluído"].includes(status)) {
+          status = (dateEnd || dateStart) < todayISO() ? "Concluído" : "Por planear";
+        }
+        events.push({
+          name, dateStart, dateEnd,
+          location: String(get("local", "localizacao", "localização") || "").trim(),
+          locationUrl: String(get("link google maps", "link maps", "link") || "").trim(),
+          description: String(get("descricao", "descrição") || "").trim(),
+          status, memberNames,
+        });
+      });
+      setPreview({ events, newNames: [...newNames.values()], errors });
+    } catch {
+      setPreview({ events: [], newNames: [], errors: ["Não foi possível ler o ficheiro. É um .xlsx válido?"] });
+    }
+  }
+
+  const canImport = preview && preview.events.length > 0 && preview.errors.length === 0
+    && (createMissing || preview.newNames.length === 0);
+
+  return (
+    <Modal title="Importar eventos de Excel" onClose={onClose} wide>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Usa o <a href="./template-eventos.xlsx" download style={{ color: "var(--ember)" }}>template de importação</a> —
+        uma linha por evento, com Nome, Data Início e Membros (separados por ; ou ,) no mínimo.
+      </p>
+      <label>Ficheiro Excel (.xlsx)
+        <input type="file" accept=".xlsx,.xls" onChange={(e) => { const f = e.target.files[0]; if (f) parseFile(f); }} />
+      </label>
+      {preview && (
+        <>
+          <p><b>{preview.events.length}</b> evento(s) prontos a importar.</p>
+          {preview.newNames.length > 0 && (
+            <>
+              <p className="hint">Membros que não existem no site ({preview.newNames.length}): {preview.newNames.join(", ")}</p>
+              <label className="check">
+                <input type="checkbox" checked={createMissing} onChange={(e) => setCreateMissing(e.target.checked)} />
+                Criar estes membros automaticamente (sem email — associas contas depois)
+              </label>
+            </>
+          )}
+          {preview.errors.length > 0 && (
+            <div>
+              {preview.errors.slice(0, 8).map((e, i) => <p key={i} className="err">{e}</p>)}
+              {preview.errors.length > 8 && <p className="err">… e mais {preview.errors.length - 8} erros.</p>}
+              <p className="hint">Corrige o ficheiro e volta a carregá-lo — nada foi importado.</p>
+            </div>
+          )}
+        </>
+      )}
+      <div className="actions">
+        <button className="btn ember" disabled={!canImport || busy}
+          onClick={async () => { setBusy(true); await onImport(preview.events, createMissing ? preview.newNames : []); setBusy(false); }}>
+          {busy ? "A importar…" : "Importar"}
+        </button>
       </div>
     </Modal>
   );

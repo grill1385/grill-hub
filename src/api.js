@@ -67,6 +67,8 @@ export const api = {
       profiles: profiles.error ? [] : profiles.data,
     };
   },
+  async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },
+  async saveEvents(list) { const { error } = await supabase.from("events").upsert(list.map(fromEvent)); if (error) throw error; },
   async saveMember(m) { const { error } = await supabase.from("members").upsert(fromMember(m)); if (error) throw error; },
   async deleteMember(id) { const { error } = await supabase.from("members").delete().eq("id", id); if (error) throw error; },
   async saveEvent(e) { const { error } = await supabase.from("events").upsert(fromEvent(e)); if (error) throw error; },
