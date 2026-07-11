@@ -1,0 +1,25 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="fl" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0" stop-color="#F5B841"/>
+      <stop offset="0.5" stop-color="#FF7A3D"/>
+      <stop offset="1" stop-color="#E8442B"/>
+    </linearGradient>
+  </defs>
+  <g stroke="#F0E9DF" stroke-width="6" stroke-linecap="round" fill="none">
+    <path d="M55 51 L80 76"/>
+    <path d="M45 51 L20 76"/>
+  </g>
+  <!-- lâmina da faca (cima-esquerda) -->
+  <path fill="#F0E9DF" d="M42 44 L18 20 C14 16 12 10 12 5 C17 5 23 7 27 11 L51 35 C53 37 53 40 51 42 L49 44 C47 46 44 46 42 44 Z"/>
+  <!-- colher (cima-direita) -->
+  <path fill="#F0E9DF" d="M52 44 L64 32 C60 24 62 15 68 9 C74 3 83 1 89 5 C93 11 91 20 85 26 C79 32 70 34 62 30 L50 42 Z"/>
+  <!-- grelha -->
+  <path fill="#17130F" stroke="#F0E9DF" stroke-width="5" d="M31 60 A19 15 0 0 0 69 60 L31 60 Z" stroke-linejoin="round"/>
+  <g stroke="#F0E9DF" stroke-width="4.5" stroke-linecap="round">
+    <path d="M41 73 L35 86"/>
+    <path d="M59 73 L65 86"/>
+  </g>
+  <!-- chama -->
+  <path fill="url(#fl)" d="M50 22 C46 31 40 37 40 46 A10 10 0 0 0 60 46 C60 39 55 35 53 30 C52 36 50 38 47 40 C50 34 51 28 50 22 Z"/>
+</svg>

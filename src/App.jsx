@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 
 /* ============================================================
-   PRESENÇAS DO GRILL
+   GRILLHUB
    - Consulta livre sem login; ADMIN entra com conta Supabase
      (email+password ou Google) para gerir
    - Dados em tabelas Supabase com RLS (ver src/api.js)
@@ -74,7 +74,7 @@ export default function App() {
   const [data, setData] = useState(null); // {admins, members, events, roles}
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
-  const [tab, setTab] = useState("eventos");
+  const [tab, setTab] = useState("home");
   const [eventView, setEventView] = useState("timeline"); // 'lista' | 'timeline'
   const [modal, setModal] = useState(null); // {type, ...payload}
   const [toast, setToast] = useState(null);
@@ -83,6 +83,8 @@ export default function App() {
   const adminRow = data?.admins?.find((a) => a.email === myEmail);
   const isAdmin = !!adminRow;
   const isMain = !!adminRow?.is_main;
+  const myMember = data?.members?.find((m) => (m.email || "").toLowerCase() === myEmail) || null;
+  const avatarSrc = myMember?.avatarUrl || session?.user?.user_metadata?.avatar_url || null;
 
   /* ---------- Carregar dados e sessão ---------- */
   useEffect(() => {
@@ -243,6 +245,44 @@ export default function App() {
     } catch { showToast("Não foi possível remover."); }
   }
 
+  async function toggleConfirmation(ev) {
+    if (!myMember) return;
+    const next = !ev.confirmations?.[myMember.id];
+    try {
+      await api.setMyConfirmation(ev.id, next);
+      setData({
+        ...data,
+        events: data.events.map((e) =>
+          e.id === ev.id ? { ...e, confirmations: { ...(e.confirmations || {}), [myMember.id]: next } } : e
+        ),
+      });
+      showToast(next ? "Presença confirmada!" : "Confirmação removida.");
+    } catch { showToast("Não foi possível registar a confirmação."); }
+  }
+
+  async function saveMyProfile(f) {
+    try {
+      if (myMember) {
+        await api.updateMyProfile(f.username.trim(), f.birthDate || null, f.avatarUrl.trim());
+        setData({
+          ...data,
+          members: data.members.map((m) =>
+            m.id === myMember.id
+              ? { ...m, username: f.username.trim() || null, birthDate: f.birthDate || null, avatarUrl: f.avatarUrl.trim() || null }
+              : m
+          ),
+        });
+      }
+      if (f.newPassword) {
+        if (f.newPassword.length < 6) { showToast("Password com 6+ caracteres."); return; }
+        const { error } = await supabase.auth.updateUser({ password: f.newPassword });
+        if (error) { showToast("Não foi possível mudar a password."); return; }
+      }
+      setModal(null);
+      showToast("Perfil atualizado.");
+    } catch { showToast("Não foi possível guardar o perfil."); }
+  }
+
   /* ---------- Render ---------- */
   if (loading) {
     return (
@@ -259,17 +299,20 @@ export default function App() {
 
       {/* ---------- Cabeçalho ---------- */}
       <header className="topbar">
-        <div className="brand">
-          <span className="brand-flame">{Icon.flame({ width: 22, height: 22 })}</span>
-          <h1>PRESENÇAS DO <em>GRILL</em></h1>
-        </div>
+        <button className="brand" onClick={() => setTab("home")} title="Início">
+          <img className="logo-img" src="./logo.svg" alt="GrillHub" />
+          <h1>GRILL<em>HUB</em></h1>
+        </button>
         <div className="topbar-right">
           {session ? (
             <>
               <span className="userchip">
-                {session.user.user_metadata?.name || session.user.email}
+                {myMember?.name || session.user.user_metadata?.name || session.user.email}
                 {isMain ? <b>ADMIN PRINCIPAL</b> : isAdmin ? <b>ADMIN</b> : null}
               </span>
+              <button className="avatar-btn" title="A minha área" onClick={() => setModal({ type: "profile" })}>
+                {avatarSrc ? <img src={avatarSrc} alt="" /> : <span>{(myMember?.name || session.user.email || "?").slice(0, 1).toUpperCase()}</span>}
+              </button>
               <button className="btn ghost" onClick={handleLogout}>Sair</button>
             </>
           ) : (
@@ -282,6 +325,7 @@ export default function App() {
         {/* ---------- Barra lateral ---------- */}
         <nav className="sidebar">
           {[
+            ["home", "Home"],
             ["eventos", "Eventos"],
             ["scoreboard", "Scoreboard"],
             ["membros", "Membros"],
@@ -296,6 +340,14 @@ export default function App() {
 
         {/* ---------- Conteúdo ---------- */}
         <main className="content">
+          {tab === "home" && (
+            <HomeTab events={sortedEventsAsc} scoreboard={scoreboard} myMember={myMember}
+              onOpenEvent={(id) => setModal({ type: "eventDetail", id })}
+              onMember={(id) => setModal({ type: "memberDetail", id })}
+              onConfirm={toggleConfirmation}
+              onGoScoreboard={() => setTab("scoreboard")} />
+          )}
+
           {tab === "eventos" && (
             <section>
               <div className="section-head">
@@ -345,7 +397,10 @@ export default function App() {
                 {scoreboard.map((row, i) => (
                   <button key={row.member.id} className="board-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
                     <span className={`rank r${i + 1}`}>{i + 1}</span>
-                    <span className="board-name">{row.member.name}</span>
+                    <span className="board-name">
+                      {row.member.name}
+                      {row.member.username && <span className="uname">@{row.member.username}</span>}
+                    </span>
                     <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
                     <span className="board-pct">{row.pct}%</span>
                     <span className="board-count">{row.present}/{row.total}</span>
@@ -366,9 +421,12 @@ export default function App() {
               <div className="cards grid2">
                 {data.members.map((mb) => (
                   <div key={mb.id} className="card member-card" onClick={() => setModal({ type: "memberDetail", id: mb.id })}>
-                    <div className="avatar">{mb.name.slice(0, 1).toUpperCase()}</div>
+                    {mb.avatarUrl
+                      ? <img className="avatar avatar-img" src={mb.avatarUrl} alt="" />
+                      : <div className="avatar">{mb.name.slice(0, 1).toUpperCase()}</div>}
                     <div className="member-info">
                       <strong>{mb.name}</strong>
+                      {mb.username && <span className="uname">@{mb.username}</span>}
                       <span>{roleById[mb.roleId]?.label || "Sem cargo"}</span>
                     </div>
                     {isAdmin && (
@@ -422,13 +480,17 @@ export default function App() {
       {/* ---------- Modais ---------- */}
       {modal?.type === "login" && <LoginModal onClose={() => setModal(null)} />}
       {modal?.type === "newPassword" && <NewPasswordModal onClose={() => setModal(null)} onDone={() => showToast("Password atualizada.")} />}
+      {modal?.type === "profile" && (
+        <ProfileModal myMember={myMember} email={session?.user?.email} onSave={saveMyProfile} onClose={() => setModal(null)} />
+      )}
 
       {modal?.type === "eventDetail" && (() => {
         const ev = data.events.find((e) => e.id === modal.id);
         if (!ev) return null;
-        return <EventDetailModal ev={ev} members={data.members} isAdmin={isAdmin}
+        return <EventDetailModal ev={ev} members={data.members} isAdmin={isAdmin} myMember={myMember}
           onEdit={() => setModal({ type: "eventForm", id: ev.id })}
           onMember={(id) => setModal({ type: "memberDetail", id })}
+          onConfirm={() => toggleConfirmation(ev)}
           onClose={() => setModal(null)} />;
       })()}
 
@@ -465,6 +527,126 @@ export default function App() {
    Componentes
    ============================================================ */
 
+function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfirm, onGoScoreboard }) {
+  const VISIBLE = 3;
+  const firstUpcoming = useMemo(() => {
+    const t = todayISO();
+    const i = events.findIndex((e) => eventEndDate(e) >= t);
+    const max = Math.max(0, events.length - VISIBLE);
+    return i === -1 ? max : Math.min(i, max);
+  }, [events]);
+  const [start, setStart] = useState(firstUpcoming);
+  const maxStart = Math.max(0, events.length - VISIBLE);
+  const s = Math.min(Math.max(0, start), maxStart);
+  const visible = events.slice(s, s + VISIBLE);
+  const todo = myMember
+    ? events.filter((e) => getStatus(e) !== "Concluído" && !e.confirmations?.[myMember.id])
+    : [];
+  const top3 = scoreboard.slice(0, 3);
+
+  return (
+    <section>
+      <div className="home-grid">
+        <div className="home-main">
+          <div className="section-head"><h2>Eventos</h2></div>
+          {events.length === 0 ? (
+            <p className="empty">Ainda não há eventos.</p>
+          ) : (
+            <div className="carousel">
+              <button className="arrow" disabled={s === 0} onClick={() => setStart(s - 1)} title="Eventos anteriores">‹</button>
+              <div className="carousel-track">
+                {visible.map((ev) => (
+                  <div key={ev.id} className="carousel-item">
+                    <div className="skewer-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+                    <EventCard ev={ev} compact onOpen={() => onOpenEvent(ev.id)} onEdit={() => {}} />
+                    {myMember && getStatus(ev) !== "Concluído" && (
+                      <button className={`pill ${ev.confirmations?.[myMember.id] ? "on" : ""}`} onClick={() => onConfirm(ev)}>
+                        {ev.confirmations?.[myMember.id] ? "✓ Vou!" : "Confirmar presença"}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <button className="arrow" disabled={s >= maxStart} onClick={() => setStart(s + 1)} title="Eventos seguintes">›</button>
+            </div>
+          )}
+
+          <div className="section-head" style={{ marginTop: 30 }}><h2>Scoreboard — Top 3</h2></div>
+          {top3.length === 0 && <p className="empty">Sem membros ainda.</p>}
+          <div className="board">
+            {top3.map((row, i) => (
+              <button key={row.member.id} className="board-row" onClick={() => onMember(row.member.id)}>
+                <span className={`rank r${i + 1}`}>{i + 1}</span>
+                <span className="board-name">
+                  {row.member.name}
+                  {row.member.username && <span className="uname">@{row.member.username}</span>}
+                </span>
+                <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
+                <span className="board-pct">{row.pct}%</span>
+                <span className="board-count">{row.present}/{row.total}</span>
+              </button>
+            ))}
+          </div>
+          {scoreboard.length > 3 && (
+            <div className="mini-list" style={{ marginTop: 10 }}>
+              {scoreboard.slice(3).map((row, i) => (
+                <button key={row.member.id} className="mini-item" onClick={() => onMember(row.member.id)}>
+                  <span>{i + 4}. {row.member.name}</span><span className="mini-date">{row.pct}%</span>
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="actions" style={{ justifyContent: "center" }}>
+            <button className="btn ember" onClick={onGoScoreboard}>Ver scoreboard completo</button>
+          </div>
+        </div>
+
+        <aside className="todo-panel">
+          <h4 style={{ marginTop: 0 }}>Futuros eventos</h4>
+          {!myMember && <p className="hint">Entra com a tua conta de membro para confirmares presenças.</p>}
+          {myMember && todo.length === 0 && <p className="hint">Tudo confirmado — brasa à vista!</p>}
+          {myMember && todo.map((ev) => (
+            <div key={ev.id} className="todo-item">
+              <button className="todo-name" onClick={() => onOpenEvent(ev.id)}>{ev.name}</button>
+              <span className="mini-date">{fmtDate(ev.dateStart)}</span>
+              <button className="pill" onClick={() => onConfirm(ev)}>Confirmar presença</button>
+            </div>
+          ))}
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function ProfileModal({ myMember, email, onSave, onClose }) {
+  const [f, setF] = useState(() => ({
+    username: myMember?.username || "",
+    birthDate: myMember?.birthDate || "",
+    avatarUrl: myMember?.avatarUrl || "",
+    newPassword: "",
+  }));
+  const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  return (
+    <Modal title="A minha área" onClose={onClose}>
+      <div className="detail-grid">
+        <div><span className="klabel">Conta</span>{email}</div>
+        <div><span className="klabel">Nome (só o admin altera)</span>{myMember?.name || "—"}</div>
+      </div>
+      {myMember ? (
+        <>
+          <label>Username (tag pública)<input value={f.username} onChange={(e) => set("username", e.target.value)} placeholder="ex.: mestre-da-brasa" /></label>
+          <label>Data de nascimento<input type="date" value={f.birthDate} onChange={(e) => set("birthDate", e.target.value)} /></label>
+          <label>Imagem de perfil (URL)<input value={f.avatarUrl} onChange={(e) => set("avatarUrl", e.target.value)} placeholder="https://…" /></label>
+        </>
+      ) : (
+        <p className="hint">Esta conta ainda não está associada a nenhum membro — pede ao admin para registar este email num membro.</p>
+      )}
+      <label>Nova password (opcional)<input type="password" value={f.newPassword} onChange={(e) => set("newPassword", e.target.value)} /></label>
+      <div className="actions"><button className="btn ember" onClick={() => onSave(f)}>Guardar</button></div>
+    </Modal>
+  );
+}
+
 function EventCard({ ev, isAdmin, onOpen, onEdit, compact }) {
   const st = getStatus(ev);
   const s = STATUS_STYLE[st];
@@ -487,7 +669,9 @@ function EventCard({ ev, isAdmin, onOpen, onEdit, compact }) {
           <i style={{ background: s.dot }} />{st}
         </span>
         {ev.location && <span className="loc">{Icon.pin({})} {ev.location}</span>}
-        <span className="presenças">{present} presenças</span>
+        {st === "Concluído"
+          ? <span className="presenças">{present} presenças</span>
+          : <span className="presenças">{Object.values(ev.confirmations || {}).filter(Boolean).length} confirmados</span>}
       </div>
     </div>
   );
@@ -583,10 +767,11 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, onEdit, onMember, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, onEdit, onMember, onConfirm, onClose }) {
   const st = getStatus(ev); const s = STATUS_STYLE[st];
   const present = members.filter((m) => ev.presences?.[m.id]);
   const absent = members.filter((m) => ev.presences && ev.presences[m.id] === false);
+  const confirmed = members.filter((m) => ev.confirmations?.[m.id]);
   const href = mapsHref(ev);
   return (
     <Modal title={ev.name} onClose={onClose} wide>
@@ -601,18 +786,38 @@ function EventDetailModal({ ev, members, isAdmin, onEdit, onMember, onClose }) {
           {href && <a href={href} target="_blank" rel="noreferrer">Abrir no Google Maps ↗</a>}
         </p>
       )}
-      <h4>Presentes ({present.length})</h4>
-      <div className="pill-row">
-        {present.length ? present.map((m) => (
-          <button key={m.id} className="pill on" onClick={() => onMember(m.id)}>{m.name}</button>
-        )) : <span className="hint">Ninguém marcado como presente.</span>}
-      </div>
-      {absent.length > 0 && (
+      {st === "Concluído" ? (
         <>
-          <h4>Ausentes ({absent.length})</h4>
+          <h4>Presentes ({present.length})</h4>
           <div className="pill-row">
-            {absent.map((m) => <button key={m.id} className="pill" onClick={() => onMember(m.id)}>{m.name}</button>)}
+            {present.length ? present.map((m) => (
+              <button key={m.id} className="pill on" onClick={() => onMember(m.id)}>{m.name}</button>
+            )) : <span className="hint">Ninguém marcado como presente.</span>}
           </div>
+          {absent.length > 0 && (
+            <>
+              <h4>Ausentes ({absent.length})</h4>
+              <div className="pill-row">
+                {absent.map((m) => <button key={m.id} className="pill" onClick={() => onMember(m.id)}>{m.name}</button>)}
+              </div>
+            </>
+          )}
+        </>
+      ) : (
+        <>
+          <h4>Confirmaram presença ({confirmed.length})</h4>
+          <div className="pill-row">
+            {confirmed.length ? confirmed.map((m) => (
+              <button key={m.id} className="pill on" onClick={() => onMember(m.id)}>{m.name}</button>
+            )) : <span className="hint">Ainda ninguém confirmou.</span>}
+          </div>
+          {myMember && (
+            <div className="actions" style={{ justifyContent: "flex-start" }}>
+              <button className={`btn ${ev.confirmations?.[myMember.id] ? "ghost" : "ember"}`} onClick={onConfirm}>
+                {ev.confirmations?.[myMember.id] ? "Cancelar confirmação" : "Confirmar presença"}
+              </button>
+            </div>
+          )}
         </>
       )}
     </Modal>
@@ -675,12 +880,19 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
         <label>Localização<input placeholder="ex.: Quinta do Zé, Óbidos" value={f.location} onChange={(e) => set("location", e.target.value)} /></label>
         <label>Link Google Maps (opcional)<input placeholder="https://maps.google.com/…" value={f.locationUrl} onChange={(e) => set("locationUrl", e.target.value)} /></label>
       </div>
-      <h4>Presenças</h4>
+      <h4>Presenças reais (confirmadas pelo admin)</h4>
       {members.length === 0 && <p className="hint">Adiciona membros primeiro no separador Membros.</p>}
+      {editing && Object.values(ev?.confirmations || {}).some(Boolean) && (
+        <p className="hint">✓ = confirmou presença antecipadamente.{" "}
+          <a href="#" onClick={(e) => { e.preventDefault(); setF((o) => ({ ...o, presences: { ...(ev?.confirmations || {}) } })); }}>
+            Usar confirmações como presenças
+          </a>
+        </p>
+      )}
       <div className="pill-row">
         {members.map((m) => (
           <button key={m.id} type="button" className={`pill ${f.presences[m.id] ? "on" : ""}`} onClick={() => togglePresence(m.id)}>
-            {m.name} {f.presences[m.id] ? "· S" : "· N"}
+            {m.name}{ev?.confirmations?.[m.id] ? " ✓" : ""} {f.presences[m.id] ? "· S" : "· N"}
           </button>
         ))}
       </div>
@@ -697,6 +909,7 @@ function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
     <Modal title={mb.name} onClose={onClose} wide>
       <div className="detail-grid">
         <div><span className="klabel">Cargo</span>{role?.label || "Sem cargo"}</div>
+        <div><span className="klabel">Username</span>{mb.username ? `@${mb.username}` : "—"}</div>
         <div><span className="klabel">Email</span>{mb.email || "—"}</div>
         <div><span className="klabel">Nascimento</span>{fmtDate(mb.birthDate)}</div>
         <div><span className="klabel">No Grill desde</span>{fmtDate(mb.joinDate)}</div>
@@ -740,7 +953,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
       </label>
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
-        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null })}>Guardar membro</button>
+        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...(mb || {}), ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null })}>Guardar membro</button>
       </div>
     </Modal>
   );
@@ -991,6 +1204,30 @@ function Style() {
 
       .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--ember); color:var(--text); padding:11px 20px; border-radius:10px; z-index:100; box-shadow:0 6px 24px rgba(0,0,0,.4); }
 
+      /* GrillHub */
+      .brand { background:none; border:none; cursor:pointer; padding:0; color:var(--text); display:flex; align-items:center; gap:10px; }
+      .logo-img { width:36px; height:36px; display:block; }
+      .avatar-btn { width:34px; height:34px; border-radius:50%; border:1px solid var(--line); background:var(--surface2); color:var(--gold); font-weight:700; cursor:pointer; overflow:hidden; display:flex; align-items:center; justify-content:center; padding:0; flex-shrink:0; }
+      .avatar-btn:hover { border-color:var(--ember); }
+      .avatar-btn img { width:100%; height:100%; object-fit:cover; }
+      img.avatar.avatar-img { object-fit:cover; padding:0; border-radius:50%; width:40px; height:40px; }
+      .uname { display:block; color:var(--muted); font-size:11px; opacity:.75; font-weight:400; }
+      .home-grid { display:flex; gap:22px; align-items:flex-start; }
+      .home-main { flex:1; min-width:0; }
+      .todo-panel { width:232px; flex-shrink:0; position:sticky; top:80px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 16px; box-shadow:0 10px 28px rgba(0,0,0,.35); }
+      .todo-item { display:flex; flex-direction:column; gap:6px; border-top:1px solid var(--line); padding:10px 0; }
+      .todo-item:first-of-type { border-top:none; }
+      .todo-name { background:none; border:none; color:var(--text); font:inherit; font-weight:600; cursor:pointer; text-align:left; padding:0; }
+      .todo-name:hover { color:var(--ember); }
+      .carousel { display:flex; align-items:stretch; gap:10px; }
+      .carousel-track { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:12px; flex:1; }
+      .carousel-item { display:flex; flex-direction:column; gap:8px; }
+      .carousel-item .pill { align-self:flex-start; }
+      .carousel-item .event-card { flex:1; }
+      .arrow { background:var(--surface); border:1px solid var(--line); color:var(--muted); border-radius:10px; width:34px; cursor:pointer; font-size:20px; flex-shrink:0; }
+      .arrow:hover:not(:disabled) { color:var(--ember); border-color:var(--ember); }
+      .arrow:disabled { opacity:.3; cursor:default; }
+
       @media (max-width: 760px) {
         .layout { flex-direction:column; }
         .sidebar { width:auto; flex-direction:row; overflow-x:auto; border-right:none; border-bottom:1px solid var(--line); padding:10px 12px; }
@@ -1006,6 +1243,8 @@ function Style() {
         .board-bar, .board-count { display:none; }
         .row { flex-direction:column; gap:0; }
         .detail-grid { grid-template-columns:1fr; }
+        .home-grid { flex-direction:column; }
+        .todo-panel { width:auto; position:static; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
     `}</style>

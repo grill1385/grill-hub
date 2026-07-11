@@ -15,15 +15,18 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const toMember = (r) => ({
   id: r.id, name: r.name, email: r.email,
   birthDate: r.birth_date, joinDate: r.join_date, roleId: r.role_id,
+  username: r.username, avatarUrl: r.avatar_url,
 });
 const fromMember = (m) => ({
   id: m.id, name: m.name, email: m.email || null,
   birth_date: m.birthDate || null, join_date: m.joinDate || null, role_id: m.roleId || null,
+  username: m.username || null, avatar_url: m.avatarUrl || null,
 });
 const toEvent = (r) => ({
   id: r.id, name: r.name, dateStart: r.date_start, dateEnd: r.date_end,
   description: r.description || "", location: r.location || "",
-  locationUrl: r.location_url || "", status: r.status, presences: r.presences || {},
+  locationUrl: r.location_url || "", status: r.status,
+  presences: r.presences || {}, confirmations: r.confirmations || {},
 });
 const fromEvent = (e) => ({
   id: e.id, name: e.name, date_start: e.dateStart, date_end: e.dateEnd || null,
@@ -55,4 +58,14 @@ export const api = {
   async deleteRole(id) { const { error } = await supabase.from("roles").delete().eq("id", id); if (error) throw error; },
   async addAdmin(email) { const { error } = await supabase.from("admins").insert({ email, is_main: false }); if (error) throw error; },
   async removeAdmin(email) { const { error } = await supabase.from("admins").delete().eq("email", email).eq("is_main", false); if (error) throw error; },
+  async updateMyProfile(username, birthDate, avatarUrl) {
+    const { error } = await supabase.rpc("update_my_profile", {
+      p_username: username || null, p_birth_date: birthDate || null, p_avatar_url: avatarUrl || null,
+    });
+    if (error) throw error;
+  },
+  async setMyConfirmation(eventId, value) {
+    const { error } = await supabase.rpc("set_my_confirmation", { p_event_id: eventId, p_value: value });
+    if (error) throw error;
+  },
 };
