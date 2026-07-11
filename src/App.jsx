@@ -2,21 +2,16 @@ import React, { useState, useEffect, useMemo } from "react";
 
 /* ============================================================
    PRESENÇAS DO GRILL
-   - Consulta livre sem login; ADMIN faz login para gerir
-   - Storage: ver src/storage.js (localStorage nesta versão;
-     preparado para trocar por um backend partilhado)
+   - Consulta livre sem login; ADMIN entra com conta Supabase
+     (email+password ou Google) para gerir
+   - Dados em tabelas Supabase com RLS (ver src/api.js)
    ============================================================ */
-import { storage } from "./storage.js";
+import { api, supabase } from "./api.js";
 
-const DATA_KEY = "grill:data";
+const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
 /* ---------- Utilitários ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
-
-async function sha256(text) {
-  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
-}
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
@@ -76,38 +71,38 @@ const Icon = {
 
 /* ============================================================ */
 export default function App() {
-  const [data, setData] = useState(null); // {users, members, events, roles}
+  const [data, setData] = useState(null); // {admins, members, events, roles}
   const [loading, setLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState(null);
+  const [session, setSession] = useState(null);
   const [tab, setTab] = useState("eventos");
   const [eventView, setEventView] = useState("timeline"); // 'lista' | 'timeline'
   const [modal, setModal] = useState(null); // {type, ...payload}
   const [toast, setToast] = useState(null);
 
-  const isAdmin = !!currentUser?.isAdmin;
-  const isMain = !!currentUser?.isMain;
+  const myEmail = session?.user?.email?.toLowerCase() || null;
+  const adminRow = data?.admins?.find((a) => a.email === myEmail);
+  const isAdmin = !!adminRow;
+  const isMain = !!adminRow?.is_main;
 
-  /* ---------- Carregar dados ---------- */
+  /* ---------- Carregar dados e sessão ---------- */
   useEffect(() => {
     (async () => {
-      let d = { users: [], members: [], events: [], roles: [] };
       try {
-        const res = await storage.get(DATA_KEY);
-        if (res?.value) d = { ...d, ...JSON.parse(res.value) };
-      } catch (e) { /* primeira utilização */ }
-      setData(d);
+        setData(await api.loadAll());
+      } catch (e) {
+        console.error(e);
+        setData({ admins: [], members: [], events: [], roles: [] });
+      }
       setLoading(false);
     })();
-  }, []);
 
-  async function save(next) {
-    setData(next);
-    try {
-      await storage.set(DATA_KEY, JSON.stringify(next));
-    } catch (e) {
-      showToast("Não foi possível guardar. Tenta novamente.");
-    }
-  }
+    supabase.auth.getSession().then(({ data: { session: sess } }) => setSession(sess));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+      setSession(sess);
+      if (event === "PASSWORD_RECOVERY") setModal({ type: "newPassword" });
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
 
   function showToast(msg) {
     setToast(msg);
@@ -146,61 +141,59 @@ export default function App() {
   }, [data]);
 
   /* ---------- Ações ---------- */
-  async function handleLogin(username, password) {
-    const hash = await sha256(password);
-    const u = data.users.find((x) => x.username.toLowerCase() === username.toLowerCase() && x.passHash === hash);
-    if (!u) return "Credenciais inválidas.";
-    setCurrentUser(u);
-    setModal(null);
-    showToast(`Bem-vindo, ${u.username}!`);
-    return null;
+  async function handleLogout() {
+    await supabase.auth.signOut();
+    if (tab === "admin") setTab("eventos");
   }
 
-  async function bootstrapMainAdmin(username, password) {
-    if (!username.trim() || password.length < 4) return "Username obrigatório e password com 4+ caracteres.";
-    const user = { id: uid(), username: username.trim(), passHash: await sha256(password), isAdmin: true, isMain: true };
-    await save({ ...data, users: [user] });
-    setCurrentUser(user);
-    showToast("Conta de ADMIN principal criada. Bom serviço no Grill!");
-    return null;
+  async function upsertEvent(ev) {
+    try {
+      await api.saveEvent(ev);
+      const events = data.events.some((e) => e.id === ev.id)
+        ? data.events.map((e) => (e.id === ev.id ? ev : e))
+        : [...data.events, ev];
+      setData({ ...data, events });
+      setModal(null);
+      showToast("Evento guardado.");
+    } catch { showToast("Não foi possível guardar o evento."); }
   }
 
-  function upsertEvent(ev) {
-    const events = data.events.some((e) => e.id === ev.id)
-      ? data.events.map((e) => (e.id === ev.id ? ev : e))
-      : [...data.events, ev];
-    save({ ...data, events });
-    setModal(null);
-    showToast("Evento guardado.");
+  async function deleteEvent(id) {
+    try {
+      await api.deleteEvent(id);
+      setData({ ...data, events: data.events.filter((e) => e.id !== id) });
+      setModal(null);
+      showToast("Evento eliminado.");
+    } catch { showToast("Não foi possível eliminar o evento."); }
   }
 
-  function deleteEvent(id) {
-    save({ ...data, events: data.events.filter((e) => e.id !== id) });
-    setModal(null);
-    showToast("Evento eliminado.");
+  async function upsertMember(mb) {
+    try {
+      await api.saveMember(mb);
+      const members = data.members.some((m) => m.id === mb.id)
+        ? data.members.map((m) => (m.id === mb.id ? mb : m))
+        : [...data.members, mb];
+      setData({ ...data, members });
+      setModal(null);
+      showToast("Membro guardado.");
+    } catch { showToast("Não foi possível guardar o membro."); }
   }
 
-  function upsertMember(mb) {
-    const members = data.members.some((m) => m.id === mb.id)
-      ? data.members.map((m) => (m.id === mb.id ? mb : m))
-      : [...data.members, mb];
-    save({ ...data, members });
-    setModal(null);
-    showToast("Membro guardado.");
+  async function deleteMember(id) {
+    try {
+      await api.deleteMember(id);
+      const events = data.events.map((e) => {
+        const p = { ...(e.presences || {}) };
+        delete p[id];
+        return { ...e, presences: p };
+      });
+      setData({ ...data, members: data.members.filter((m) => m.id !== id), events });
+      setModal(null);
+      showToast("Membro eliminado.");
+    } catch { showToast("Não foi possível eliminar o membro."); }
   }
 
-  function deleteMember(id) {
-    const events = data.events.map((e) => {
-      const p = { ...(e.presences || {}) };
-      delete p[id];
-      return { ...e, presences: p };
-    });
-    save({ ...data, members: data.members.filter((m) => m.id !== id), events });
-    setModal(null);
-    showToast("Membro eliminado.");
-  }
-
-  function saveRole(roleId, label, relation, refRoleId) {
+  async function saveRole(roleId, label, relation, refRoleId) {
     const existing = data.roles.find((r) => r.id === roleId);
     const others = data.roles.filter((r) => r.id !== roleId);
     let level = existing ? existing.level : 0;
@@ -208,39 +201,46 @@ export default function App() {
       const ref = others.find((r) => r.id === refRoleId);
       if (ref) level = relation === "acima" ? ref.level - 1 : relation === "abaixo" ? ref.level + 1 : ref.level;
     }
-    const roles = existing
-      ? data.roles.map((r) => (r.id === roleId ? { ...r, label: label.trim(), level } : r))
-      : [...data.roles, { id: uid(), label: label.trim(), level }];
-    save({ ...data, roles });
-    setModal(null);
-    showToast(existing ? "Cargo atualizado." : "Cargo adicionado.");
+    const role = { id: existing ? roleId : uid(), label: label.trim(), level };
+    try {
+      await api.saveRole(role);
+      const roles = existing
+        ? data.roles.map((r) => (r.id === role.id ? role : r))
+        : [...data.roles, role];
+      setData({ ...data, roles });
+      setModal(null);
+      showToast(existing ? "Cargo atualizado." : "Cargo adicionado.");
+    } catch { showToast("Não foi possível guardar o cargo."); }
   }
 
-  function deleteRole(id) {
-    const members = data.members.map((m) => (m.roleId === id ? { ...m, roleId: null } : m));
-    save({ ...data, roles: data.roles.filter((r) => r.id !== id), members });
-    setModal(null);
-    showToast("Cargo eliminado.");
+  async function deleteRole(id) {
+    try {
+      await api.deleteRole(id);
+      const members = data.members.map((m) => (m.roleId === id ? { ...m, roleId: null } : m));
+      setData({ ...data, roles: data.roles.filter((r) => r.id !== id), members });
+      setModal(null);
+      showToast("Cargo eliminado.");
+    } catch { showToast("Não foi possível eliminar o cargo."); }
   }
 
-  async function addUser(username, password, makeAdmin) {
-    if (!username.trim() || password.length < 4) return "Username obrigatório e password com 4+ caracteres.";
-    if (data.users.some((u) => u.username.toLowerCase() === username.trim().toLowerCase())) return "Esse username já existe.";
-    const user = { id: uid(), username: username.trim(), passHash: await sha256(password), isAdmin: !!makeAdmin, isMain: false };
-    await save({ ...data, users: [...data.users, user] });
-    showToast("Utilizador criado.");
-    return null;
+  async function addAdmin(email) {
+    const e = email.trim().toLowerCase();
+    if (!e.includes("@")) return "Email inválido.";
+    if (data.admins.some((a) => a.email === e)) return "Esse email já é admin.";
+    try {
+      await api.addAdmin(e);
+      setData({ ...data, admins: [...data.admins, { email: e, is_main: false }] });
+      showToast("Admin adicionado.");
+      return null;
+    } catch { return "Não foi possível adicionar."; }
   }
 
-  function toggleAdmin(userId) {
-    save({
-      ...data,
-      users: data.users.map((u) => (u.id === userId && !u.isMain ? { ...u, isAdmin: !u.isAdmin } : u)),
-    });
-  }
-
-  function removeUser(userId) {
-    save({ ...data, users: data.users.filter((u) => u.id !== userId || u.isMain) });
+  async function removeAdmin(email) {
+    try {
+      await api.removeAdmin(email);
+      setData({ ...data, admins: data.admins.filter((a) => a.email !== email) });
+      showToast("Admin removido.");
+    } catch { showToast("Não foi possível remover."); }
   }
 
   /* ---------- Render ---------- */
@@ -249,16 +249,6 @@ export default function App() {
       <div className="grill-root grill-center">
         <Style />
         <div className="loading">{Icon.flame({ width: 28, height: 28 })}<span>A acender a brasa…</span></div>
-      </div>
-    );
-  }
-
-  // Primeira utilização: criar o ADMIN principal
-  if (data.users.length === 0) {
-    return (
-      <div className="grill-root grill-center">
-        <Style />
-        <BootstrapForm onSubmit={bootstrapMainAdmin} />
       </div>
     );
   }
@@ -274,13 +264,13 @@ export default function App() {
           <h1>PRESENÇAS DO <em>GRILL</em></h1>
         </div>
         <div className="topbar-right">
-          {currentUser ? (
+          {session ? (
             <>
               <span className="userchip">
-                {currentUser.username}
+                {session.user.user_metadata?.name || session.user.email}
                 {isMain ? <b>ADMIN PRINCIPAL</b> : isAdmin ? <b>ADMIN</b> : null}
               </span>
-              <button className="btn ghost" onClick={() => { setCurrentUser(null); if (tab === "admin") setTab("eventos"); }}>Sair</button>
+              <button className="btn ghost" onClick={handleLogout}>Sair</button>
             </>
           ) : (
             <button className="btn ember" onClick={() => setModal({ type: "login" })}>Entrar</button>
@@ -423,14 +413,15 @@ export default function App() {
           )}
 
           {tab === "admin" && isAdmin && (
-            <AdminPanel data={data} isMain={isMain} currentUser={currentUser}
-              onAddUser={addUser} onToggleAdmin={toggleAdmin} onRemoveUser={removeUser} />
+            <AdminPanel admins={data.admins} isMain={isMain}
+              onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin} />
           )}
         </main>
       </div>
 
       {/* ---------- Modais ---------- */}
-      {modal?.type === "login" && <LoginModal onClose={() => setModal(null)} onLogin={handleLogin} />}
+      {modal?.type === "login" && <LoginModal onClose={() => setModal(null)} />}
+      {modal?.type === "newPassword" && <NewPasswordModal onClose={() => setModal(null)} onDone={() => showToast("Password atualizada.")} />}
 
       {modal?.type === "eventDetail" && (() => {
         const ev = data.events.find((e) => e.id === modal.id);
@@ -516,32 +507,79 @@ function Modal({ title, onClose, children, wide }) {
   );
 }
 
-function LoginModal({ onClose, onLogin }) {
-  const [u, setU] = useState(""); const [p, setP] = useState(""); const [err, setErr] = useState(null);
+function LoginModal({ onClose }) {
+  const [mode, setMode] = useState("login"); // 'login' | 'signup' | 'reset'
+  const [email, setEmail] = useState("");
+  const [p, setP] = useState("");
+  const [err, setErr] = useState(null);
+  const [msg, setMsg] = useState(null);
+
+  function switchMode(m) { setMode(m); setErr(null); setMsg(null); }
+
+  async function submit() {
+    setErr(null); setMsg(null);
+    if (mode === "login") {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: p });
+      if (error) setErr("Credenciais inválidas."); else onClose();
+    } else if (mode === "signup") {
+      if (p.length < 6) { setErr("Password com 6+ caracteres."); return; }
+      const { error } = await supabase.auth.signUp({ email, password: p, options: { emailRedirectTo: SITE_URL } });
+      if (error) setErr(error.message); else setMsg("Conta criada — vê o teu email para confirmar.");
+    } else {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: SITE_URL });
+      if (error) setErr(error.message); else setMsg("Email de recuperação enviado.");
+    }
+  }
+
+  async function google() {
+    const { error } = await supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: SITE_URL } });
+    if (error) setErr(error.message);
+  }
+
+  const titles = { login: "Entrar", signup: "Criar conta", reset: "Recuperar password" };
   return (
-    <Modal title="Entrar" onClose={onClose}>
-      <label>Username<input value={u} onChange={(e) => setU(e.target.value)} autoFocus /></label>
-      <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)}
-        onKeyDown={async (e) => { if (e.key === "Enter") setErr(await onLogin(u, p)); }} /></label>
+    <Modal title={titles[mode]} onClose={onClose}>
+      <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus /></label>
+      {mode !== "reset" && (
+        <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") submit(); }} /></label>
+      )}
       {err && <p className="err">{err}</p>}
-      <div className="actions"><button className="btn ember" onClick={async () => setErr(await onLogin(u, p))}>Entrar</button></div>
+      {msg && <p className="hint">{msg}</p>}
+      <div className="actions">
+        <button className="btn ghost" onClick={google}>Entrar com Google</button>
+        <button className="btn ember" onClick={submit}>{titles[mode]}</button>
+      </div>
+      <p className="hint">
+        {mode === "login" ? (
+          <>
+            Sem conta? <a href="#" onClick={(e) => { e.preventDefault(); switchMode("signup"); }}>Criar conta</a>
+            {" · "}
+            <a href="#" onClick={(e) => { e.preventDefault(); switchMode("reset"); }}>Esqueci-me da password</a>
+          </>
+        ) : (
+          <a href="#" onClick={(e) => { e.preventDefault(); switchMode("login"); }}>← Voltar ao login</a>
+        )}
+      </p>
       <p className="hint">A consulta é livre — o login só é necessário para gerir o Grill.</p>
     </Modal>
   );
 }
 
-function BootstrapForm({ onSubmit }) {
-  const [u, setU] = useState(""); const [p, setP] = useState(""); const [err, setErr] = useState(null);
+function NewPasswordModal({ onClose, onDone }) {
+  const [p, setP] = useState(""); const [err, setErr] = useState(null);
+  async function submit() {
+    if (p.length < 6) { setErr("Password com 6+ caracteres."); return; }
+    const { error } = await supabase.auth.updateUser({ password: p });
+    if (error) setErr(error.message); else { onDone(); onClose(); }
+  }
   return (
-    <div className="bootstrap card">
-      <span className="brand-flame big">{Icon.flame({ width: 36, height: 36 })}</span>
-      <h1>PRESENÇAS DO <em>GRILL</em></h1>
-      <p>Primeira utilização: cria a conta do <b>ADMIN principal</b>.</p>
-      <label>Username<input value={u} onChange={(e) => setU(e.target.value)} autoFocus /></label>
-      <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)} /></label>
+    <Modal title="Definir nova password" onClose={onClose}>
+      <label>Nova password<input type="password" value={p} onChange={(e) => setP(e.target.value)} autoFocus
+        onKeyDown={(e) => { if (e.key === "Enter") submit(); }} /></label>
       {err && <p className="err">{err}</p>}
-      <button className="btn ember" onClick={async () => setErr(await onSubmit(u, p))}>Acender a grelha</button>
-    </div>
+      <div className="actions"><button className="btn ember" onClick={submit}>Guardar</button></div>
+    </Modal>
   );
 }
 
@@ -746,43 +784,41 @@ function RoleFormModal({ roles, role, onSave, onDelete, onClose }) {
   );
 }
 
-function AdminPanel({ data, isMain, currentUser, onAddUser, onToggleAdmin, onRemoveUser }) {
-  const [u, setU] = useState(""); const [p, setP] = useState(""); const [adm, setAdm] = useState(false); const [err, setErr] = useState(null);
+function AdminPanel({ admins, isMain, onAddAdmin, onRemoveAdmin }) {
+  const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   return (
     <section>
-      <div className="section-head"><h2>Gestão de utilizadores</h2></div>
+      <div className="section-head"><h2>Gestão de admins</h2></div>
       {isMain ? (
         <div className="card admin-card">
-          <h4>Criar novo utilizador</h4>
+          <h4>Adicionar admin</h4>
+          <p className="hint">A pessoa cria conta no site (email/password ou Google) e tu adicionas aqui o email dela para lhe dar permissões de gestão.</p>
           <div className="row">
-            <label>Username<input value={u} onChange={(e) => setU(e.target.value)} /></label>
-            <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)} /></label>
+            <label>Email<input type="email" value={email} onChange={(e) => setEmail(e.target.value)} /></label>
           </div>
-          <label className="check"><input type="checkbox" checked={adm} onChange={(e) => setAdm(e.target.checked)} /> Nomear como ADMIN</label>
           {err && <p className="err">{err}</p>}
           <div className="actions">
-            <button className="btn ember" onClick={async () => { const e = await onAddUser(u, p, adm); setErr(e); if (!e) { setU(""); setP(""); setAdm(false); } }}>Criar utilizador</button>
+            <button className="btn ember" onClick={async () => { const e = await onAddAdmin(email); setErr(e); if (!e) setEmail(""); }}>Adicionar</button>
           </div>
         </div>
       ) : (
-        <p className="hint">Apenas o ADMIN principal pode criar utilizadores e nomear ADMINs.</p>
+        <p className="hint">Apenas o ADMIN principal pode gerir admins.</p>
       )}
 
-      <h4 style={{ marginTop: 24 }}>Utilizadores ({data.users.length})</h4>
+      <h4 style={{ marginTop: 24 }}>Admins ({admins.length})</h4>
       <div className="mini-list">
-        {data.users.map((usr) => (
-          <div key={usr.id} className="mini-item static">
-            <span>{usr.username} {usr.isMain ? <b className="tag">PRINCIPAL</b> : usr.isAdmin ? <b className="tag">ADMIN</b> : null}</span>
-            {isMain && !usr.isMain && (
+        {admins.map((a) => (
+          <div key={a.email} className="mini-item static">
+            <span>{a.email} {a.is_main ? <b className="tag">PRINCIPAL</b> : <b className="tag">ADMIN</b>}</span>
+            {isMain && !a.is_main && (
               <span className="row-actions">
-                <button className="btn ghost small" onClick={() => onToggleAdmin(usr.id)}>{usr.isAdmin ? "Remover ADMIN" : "Nomear ADMIN"}</button>
-                <button className="btn danger small" onClick={() => onRemoveUser(usr.id)}>Eliminar</button>
+                <button className="btn danger small" onClick={() => onRemoveAdmin(a.email)}>Remover</button>
               </span>
             )}
           </div>
         ))}
       </div>
-      <p className="hint">Nota: a autenticação corre no browser e os dados são partilhados por todos os visitantes desta app. Não uses passwords que utilizes noutros sítios.</p>
+      <p className="hint">As contas são geridas pelo Supabase Auth — qualquer pessoa pode criar conta, mas só os emails desta lista têm permissões de gestão.</p>
     </section>
   );
 }
