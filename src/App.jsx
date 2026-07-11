@@ -1,0 +1,952 @@
+import React, { useState, useEffect, useMemo } from "react";
+
+/* ============================================================
+   PRESENÇAS DO GRILL
+   - Consulta livre sem login; ADMIN faz login para gerir
+   - Storage: ver src/storage.js (localStorage nesta versão;
+     preparado para trocar por um backend partilhado)
+   ============================================================ */
+import { storage } from "./storage.js";
+
+const DATA_KEY = "grill:data";
+
+/* ---------- Utilitários ---------- */
+const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+
+async function sha256(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+const todayISO = () => new Date().toISOString().slice(0, 10);
+
+function fmtDate(iso) {
+  if (!iso) return "—";
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function eventEndDate(ev) {
+  return ev.dateEnd || ev.dateStart;
+}
+
+function getStatus(ev) {
+  if (eventEndDate(ev) && eventEndDate(ev) < todayISO()) return "Concluído";
+  return ev.status || "Por planear";
+}
+
+const STATUS_STYLE = {
+  "Concluído": { bg: "#2E3B2E", fg: "#9BC98F", dot: "#7FB069" },
+  "Planeado": { bg: "#3B3220", fg: "#F5C168", dot: "#F5B841" },
+  "Por planear": { bg: "#3A2C26", fg: "#F09A6A", dot: "#FF7A3D" },
+};
+
+function mapsHref(ev) {
+  if (ev.locationUrl) return ev.locationUrl;
+  if (ev.location) return `https://www.google.com/maps/search/${encodeURIComponent(ev.location)}`;
+  return null;
+}
+
+/* ---------- Ícones (SVG inline) ---------- */
+const Icon = {
+  gear: (p) => (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" {...p}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.6 1.6 0 0 0 .32 1.77l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.6 1.6 0 0 0-1.77-.32 1.6 1.6 0 0 0-.97 1.47V21a2 2 0 1 1-4 0v-.09a1.6 1.6 0 0 0-1.05-1.47 1.6 1.6 0 0 0-1.77.32l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.6 1.6 0 0 0 4.6 15a1.6 1.6 0 0 0-1.47-.97H3a2 2 0 1 1 0-4h.09A1.6 1.6 0 0 0 4.56 9a1.6 1.6 0 0 0-.32-1.77l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.6 1.6 0 0 0 8.84 4.7 1.6 1.6 0 0 0 9.81 3.23V3a2 2 0 1 1 4 0v.09c0 .64.38 1.21.97 1.47a1.6 1.6 0 0 0 1.77-.32l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.6 1.6 0 0 0-.32 1.77c.26.59.83.97 1.47.97H21a2 2 0 1 1 0 4h-.09c-.64 0-1.21.38-1.47.97Z" />
+    </svg>
+  ),
+  flame: (p) => (
+    <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" {...p}>
+      <path d="M12 2s1 3-1.5 6C8.5 10.5 7 12.2 7 15a5 5 0 0 0 10 0c0-1.5-.5-2.6-1.2-3.7-.4 1-1 1.7-1.8 2.2.3-3.5-1-6.5-2-9.5Z" />
+    </svg>
+  ),
+  pin: (p) => (
+    <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" {...p}>
+      <path d="M20 10c0 6-8 12-8 12S4 16 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="3" />
+    </svg>
+  ),
+  x: (p) => (
+    <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" {...p}>
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  ),
+};
+
+/* ============================================================ */
+export default function App() {
+  const [data, setData] = useState(null); // {users, members, events, roles}
+  const [loading, setLoading] = useState(true);
+  const [currentUser, setCurrentUser] = useState(null);
+  const [tab, setTab] = useState("eventos");
+  const [eventView, setEventView] = useState("timeline"); // 'lista' | 'timeline'
+  const [modal, setModal] = useState(null); // {type, ...payload}
+  const [toast, setToast] = useState(null);
+
+  const isAdmin = !!currentUser?.isAdmin;
+  const isMain = !!currentUser?.isMain;
+
+  /* ---------- Carregar dados ---------- */
+  useEffect(() => {
+    (async () => {
+      let d = { users: [], members: [], events: [], roles: [] };
+      try {
+        const res = await storage.get(DATA_KEY);
+        if (res?.value) d = { ...d, ...JSON.parse(res.value) };
+      } catch (e) { /* primeira utilização */ }
+      setData(d);
+      setLoading(false);
+    })();
+  }, []);
+
+  async function save(next) {
+    setData(next);
+    try {
+      await storage.set(DATA_KEY, JSON.stringify(next));
+    } catch (e) {
+      showToast("Não foi possível guardar. Tenta novamente.");
+    }
+  }
+
+  function showToast(msg) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2600);
+  }
+
+  /* ---------- Cálculos ---------- */
+  const roleById = useMemo(() => {
+    const m = {};
+    (data?.roles || []).forEach((r) => (m[r.id] = r));
+    return m;
+  }, [data]);
+
+  const scoreboard = useMemo(() => {
+    if (!data) return [];
+    const concluded = data.events.filter((e) => getStatus(e) === "Concluído");
+    return data.members
+      .map((mb) => {
+        const eligible = concluded.filter((e) => !mb.joinDate || eventEndDate(e) >= mb.joinDate);
+        const present = eligible.filter((e) => e.presences?.[mb.id]);
+        const pct = eligible.length ? Math.round((present.length / eligible.length) * 100) : 0;
+        return { member: mb, pct, present: present.length, total: eligible.length };
+      })
+      .sort((a, b) => b.pct - a.pct || b.present - a.present || a.member.name.localeCompare(b.member.name));
+  }, [data]);
+
+  const sortedEventsAsc = useMemo(
+    () => (data ? [...data.events].sort((a, b) => (a.dateStart || "").localeCompare(b.dateStart || "")) : []),
+    [data]
+  );
+
+  const hierarchyTiers = useMemo(() => {
+    if (!data?.roles.length) return [];
+    const levels = [...new Set(data.roles.map((r) => r.level))].sort((a, b) => a - b);
+    return levels.map((lv) => data.roles.filter((r) => r.level === lv));
+  }, [data]);
+
+  /* ---------- Ações ---------- */
+  async function handleLogin(username, password) {
+    const hash = await sha256(password);
+    const u = data.users.find((x) => x.username.toLowerCase() === username.toLowerCase() && x.passHash === hash);
+    if (!u) return "Credenciais inválidas.";
+    setCurrentUser(u);
+    setModal(null);
+    showToast(`Bem-vindo, ${u.username}!`);
+    return null;
+  }
+
+  async function bootstrapMainAdmin(username, password) {
+    if (!username.trim() || password.length < 4) return "Username obrigatório e password com 4+ caracteres.";
+    const user = { id: uid(), username: username.trim(), passHash: await sha256(password), isAdmin: true, isMain: true };
+    await save({ ...data, users: [user] });
+    setCurrentUser(user);
+    showToast("Conta de ADMIN principal criada. Bom serviço no Grill!");
+    return null;
+  }
+
+  function upsertEvent(ev) {
+    const events = data.events.some((e) => e.id === ev.id)
+      ? data.events.map((e) => (e.id === ev.id ? ev : e))
+      : [...data.events, ev];
+    save({ ...data, events });
+    setModal(null);
+    showToast("Evento guardado.");
+  }
+
+  function deleteEvent(id) {
+    save({ ...data, events: data.events.filter((e) => e.id !== id) });
+    setModal(null);
+    showToast("Evento eliminado.");
+  }
+
+  function upsertMember(mb) {
+    const members = data.members.some((m) => m.id === mb.id)
+      ? data.members.map((m) => (m.id === mb.id ? mb : m))
+      : [...data.members, mb];
+    save({ ...data, members });
+    setModal(null);
+    showToast("Membro guardado.");
+  }
+
+  function deleteMember(id) {
+    const events = data.events.map((e) => {
+      const p = { ...(e.presences || {}) };
+      delete p[id];
+      return { ...e, presences: p };
+    });
+    save({ ...data, members: data.members.filter((m) => m.id !== id), events });
+    setModal(null);
+    showToast("Membro eliminado.");
+  }
+
+  function addRole(label, relation, refRoleId) {
+    let level = 0;
+    if (data.roles.length && refRoleId) {
+      const ref = data.roles.find((r) => r.id === refRoleId);
+      level = relation === "acima" ? ref.level - 1 : relation === "abaixo" ? ref.level + 1 : ref.level;
+    }
+    save({ ...data, roles: [...data.roles, { id: uid(), label: label.trim(), level }] });
+    setModal(null);
+    showToast("Cargo adicionado.");
+  }
+
+  function deleteRole(id) {
+    const members = data.members.map((m) => (m.roleId === id ? { ...m, roleId: null } : m));
+    save({ ...data, roles: data.roles.filter((r) => r.id !== id), members });
+    showToast("Cargo eliminado.");
+  }
+
+  async function addUser(username, password, makeAdmin) {
+    if (!username.trim() || password.length < 4) return "Username obrigatório e password com 4+ caracteres.";
+    if (data.users.some((u) => u.username.toLowerCase() === username.trim().toLowerCase())) return "Esse username já existe.";
+    const user = { id: uid(), username: username.trim(), passHash: await sha256(password), isAdmin: !!makeAdmin, isMain: false };
+    await save({ ...data, users: [...data.users, user] });
+    showToast("Utilizador criado.");
+    return null;
+  }
+
+  function toggleAdmin(userId) {
+    save({
+      ...data,
+      users: data.users.map((u) => (u.id === userId && !u.isMain ? { ...u, isAdmin: !u.isAdmin } : u)),
+    });
+  }
+
+  function removeUser(userId) {
+    save({ ...data, users: data.users.filter((u) => u.id !== userId || u.isMain) });
+  }
+
+  /* ---------- Render ---------- */
+  if (loading) {
+    return (
+      <div className="grill-root grill-center">
+        <Style />
+        <div className="loading">{Icon.flame({ width: 28, height: 28 })}<span>A acender a brasa…</span></div>
+      </div>
+    );
+  }
+
+  // Primeira utilização: criar o ADMIN principal
+  if (data.users.length === 0) {
+    return (
+      <div className="grill-root grill-center">
+        <Style />
+        <BootstrapForm onSubmit={bootstrapMainAdmin} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="grill-root">
+      <Style />
+
+      {/* ---------- Cabeçalho ---------- */}
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-flame">{Icon.flame({ width: 22, height: 22 })}</span>
+          <h1>PRESENÇAS DO <em>GRILL</em></h1>
+        </div>
+        <div className="topbar-right">
+          {currentUser ? (
+            <>
+              <span className="userchip">
+                {currentUser.username}
+                {isMain ? <b>ADMIN PRINCIPAL</b> : isAdmin ? <b>ADMIN</b> : null}
+              </span>
+              <button className="btn ghost" onClick={() => { setCurrentUser(null); if (tab === "admin") setTab("eventos"); }}>Sair</button>
+            </>
+          ) : (
+            <button className="btn ember" onClick={() => setModal({ type: "login" })}>Entrar</button>
+          )}
+        </div>
+      </header>
+
+      <div className="layout">
+        {/* ---------- Barra lateral ---------- */}
+        <nav className="sidebar">
+          {[
+            ["eventos", "Eventos"],
+            ["scoreboard", "Scoreboard"],
+            ["membros", "Membros"],
+            ["hierarquia", "Hierarquia"],
+            ...(isAdmin ? [["admin", "Gestão"]] : []),
+          ].map(([id, label]) => (
+            <button key={id} className={`navbtn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
+              {label}
+            </button>
+          ))}
+        </nav>
+
+        {/* ---------- Conteúdo ---------- */}
+        <main className="content">
+          {tab === "eventos" && (
+            <section>
+              <div className="section-head">
+                <h2>Eventos</h2>
+                <div className="head-actions">
+                  <div className="segmented">
+                    <button className={eventView === "lista" ? "on" : ""} onClick={() => setEventView("lista")}>Lista</button>
+                    <button className={eventView === "timeline" ? "on" : ""} onClick={() => setEventView("timeline")}>Friso temporal</button>
+                  </div>
+                  {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "eventForm" })}>+ Evento</button>}
+                </div>
+              </div>
+
+              {sortedEventsAsc.length === 0 && (
+                <p className="empty">Ainda não há eventos. {isAdmin ? "Adiciona o primeiro com o botão + Evento." : "O ADMIN ainda não acendeu a grelha."}</p>
+              )}
+
+              {eventView === "lista" ? (
+                <div className="cards">
+                  {[...sortedEventsAsc].reverse().map((ev) => (
+                    <EventCard key={ev.id} ev={ev} isAdmin={isAdmin}
+                      onOpen={() => setModal({ type: "eventDetail", id: ev.id })}
+                      onEdit={() => setModal({ type: "eventForm", id: ev.id })} />
+                  ))}
+                </div>
+              ) : (
+                <div className="skewer">
+                  {sortedEventsAsc.map((ev, i) => (
+                    <div key={ev.id} className={`skewer-item ${i % 2 ? "right" : "left"}`}>
+                      <span className="skewer-dot" style={{ background: STATUS_STYLE[getStatus(ev)].dot }} />
+                      <div className="skewer-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+                      <EventCard ev={ev} isAdmin={isAdmin} compact
+                        onOpen={() => setModal({ type: "eventDetail", id: ev.id })}
+                        onEdit={() => setModal({ type: "eventForm", id: ev.id })} />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
+          {tab === "scoreboard" && (
+            <section>
+              <div className="section-head"><h2>Scoreboard de presenças</h2></div>
+              {scoreboard.length === 0 && <p className="empty">Sem membros ainda.</p>}
+              <div className="board">
+                {scoreboard.map((row, i) => (
+                  <button key={row.member.id} className="board-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
+                    <span className={`rank r${i + 1}`}>{i + 1}</span>
+                    <span className="board-name">{row.member.name}</span>
+                    <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
+                    <span className="board-pct">{row.pct}%</span>
+                    <span className="board-count">{row.present}/{row.total}</span>
+                  </button>
+                ))}
+              </div>
+              <p className="hint">Percentagem calculada sobre eventos concluídos desde a data de integração de cada membro.</p>
+            </section>
+          )}
+
+          {tab === "membros" && (
+            <section>
+              <div className="section-head">
+                <h2>Membros do Grill</h2>
+                {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "memberForm" })}>+ Membro</button>}
+              </div>
+              {data.members.length === 0 && <p className="empty">Sem membros registados.</p>}
+              <div className="cards grid2">
+                {data.members.map((mb) => (
+                  <div key={mb.id} className="card member-card" onClick={() => setModal({ type: "memberDetail", id: mb.id })}>
+                    <div className="avatar">{mb.name.slice(0, 1).toUpperCase()}</div>
+                    <div className="member-info">
+                      <strong>{mb.name}</strong>
+                      <span>{roleById[mb.roleId]?.label || "Sem cargo"}</span>
+                    </div>
+                    {isAdmin && (
+                      <button className="iconbtn" title="Editar" onClick={(e) => { e.stopPropagation(); setModal({ type: "memberForm", id: mb.id }); }}>
+                        {Icon.gear({})}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {tab === "hierarquia" && (
+            <section>
+              <div className="section-head">
+                <h2>Hierarquia de cargos</h2>
+                {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "roleForm" })}>+ Cargo</button>}
+              </div>
+              {hierarchyTiers.length === 0 && <p className="empty">Ainda não há cargos definidos.</p>}
+              <div className="tree">
+                {hierarchyTiers.map((tier, i) => (
+                  <div key={i} className="tier">
+                    {i > 0 && <div className="tier-link" />}
+                    <div className="tier-roles">
+                      {tier.map((r) => (
+                        <div key={r.id} className="role-chip">
+                          {r.label}
+                          <span className="role-count">{data.members.filter((m) => m.roleId === r.id).length}</span>
+                          {isAdmin && <button className="chip-x" onClick={() => deleteRole(r.id)} title="Eliminar cargo">×</button>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
+          {tab === "admin" && isAdmin && (
+            <AdminPanel data={data} isMain={isMain} currentUser={currentUser}
+              onAddUser={addUser} onToggleAdmin={toggleAdmin} onRemoveUser={removeUser} />
+          )}
+        </main>
+      </div>
+
+      {/* ---------- Modais ---------- */}
+      {modal?.type === "login" && <LoginModal onClose={() => setModal(null)} onLogin={handleLogin} />}
+
+      {modal?.type === "eventDetail" && (() => {
+        const ev = data.events.find((e) => e.id === modal.id);
+        if (!ev) return null;
+        return <EventDetailModal ev={ev} members={data.members} isAdmin={isAdmin}
+          onEdit={() => setModal({ type: "eventForm", id: ev.id })}
+          onMember={(id) => setModal({ type: "memberDetail", id })}
+          onClose={() => setModal(null)} />;
+      })()}
+
+      {modal?.type === "eventForm" && (
+        <EventFormModal ev={data.events.find((e) => e.id === modal.id)} members={data.members}
+          onSave={upsertEvent} onDelete={deleteEvent} onClose={() => setModal(null)} />
+      )}
+
+      {modal?.type === "memberDetail" && (() => {
+        const mb = data.members.find((m) => m.id === modal.id);
+        if (!mb) return null;
+        const attended = sortedEventsAsc.filter((e) => e.presences?.[mb.id]);
+        const row = scoreboard.find((r) => r.member.id === mb.id);
+        return <MemberDetailModal mb={mb} role={roleById[mb.roleId]} attended={attended} row={row}
+          onEvent={(id) => setModal({ type: "eventDetail", id })} onClose={() => setModal(null)} />;
+      })()}
+
+      {modal?.type === "memberForm" && (
+        <MemberFormModal mb={data.members.find((m) => m.id === modal.id)} roles={data.roles}
+          onSave={upsertMember} onDelete={deleteMember} onClose={() => setModal(null)} />
+      )}
+
+      {modal?.type === "roleForm" && (
+        <RoleFormModal roles={data.roles} onSave={addRole} onClose={() => setModal(null)} />
+      )}
+
+      {toast && <div className="toast">{toast}</div>}
+    </div>
+  );
+}
+
+/* ============================================================
+   Componentes
+   ============================================================ */
+
+function EventCard({ ev, isAdmin, onOpen, onEdit, compact }) {
+  const st = getStatus(ev);
+  const s = STATUS_STYLE[st];
+  const present = Object.values(ev.presences || {}).filter(Boolean).length;
+  return (
+    <div className={`card event-card ${compact ? "compact" : ""}`} onClick={onOpen}>
+      <div className="event-top">
+        <strong>{ev.name}</strong>
+        {isAdmin && (
+          <button className="iconbtn" title="Editar evento" onClick={(e) => { e.stopPropagation(); onEdit(); }}>
+            {Icon.gear({})}
+          </button>
+        )}
+      </div>
+      {!compact && (
+        <div className="event-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+      )}
+      <div className="event-meta">
+        <span className="status" style={{ background: s.bg, color: s.fg }}>
+          <i style={{ background: s.dot }} />{st}
+        </span>
+        {ev.location && <span className="loc">{Icon.pin({})} {ev.location}</span>}
+        <span className="presenças">{present} presenças</span>
+      </div>
+    </div>
+  );
+}
+
+function Modal({ title, onClose, children, wide }) {
+  return (
+    <div className="overlay" onClick={onClose}>
+      <div className={`modal ${wide ? "wide" : ""}`} onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>{title}</h3>
+          <button className="iconbtn" onClick={onClose}>{Icon.x({})}</button>
+        </div>
+        <div className="modal-body">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function LoginModal({ onClose, onLogin }) {
+  const [u, setU] = useState(""); const [p, setP] = useState(""); const [err, setErr] = useState(null);
+  return (
+    <Modal title="Entrar" onClose={onClose}>
+      <label>Username<input value={u} onChange={(e) => setU(e.target.value)} autoFocus /></label>
+      <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)}
+        onKeyDown={async (e) => { if (e.key === "Enter") setErr(await onLogin(u, p)); }} /></label>
+      {err && <p className="err">{err}</p>}
+      <div className="actions"><button className="btn ember" onClick={async () => setErr(await onLogin(u, p))}>Entrar</button></div>
+      <p className="hint">A consulta é livre — o login só é necessário para gerir o Grill.</p>
+    </Modal>
+  );
+}
+
+function BootstrapForm({ onSubmit }) {
+  const [u, setU] = useState(""); const [p, setP] = useState(""); const [err, setErr] = useState(null);
+  return (
+    <div className="bootstrap card">
+      <span className="brand-flame big">{Icon.flame({ width: 36, height: 36 })}</span>
+      <h1>PRESENÇAS DO <em>GRILL</em></h1>
+      <p>Primeira utilização: cria a conta do <b>ADMIN principal</b>.</p>
+      <label>Username<input value={u} onChange={(e) => setU(e.target.value)} autoFocus /></label>
+      <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)} /></label>
+      {err && <p className="err">{err}</p>}
+      <button className="btn ember" onClick={async () => setErr(await onSubmit(u, p))}>Acender a grelha</button>
+    </div>
+  );
+}
+
+function EventDetailModal({ ev, members, isAdmin, onEdit, onMember, onClose }) {
+  const st = getStatus(ev); const s = STATUS_STYLE[st];
+  const present = members.filter((m) => ev.presences?.[m.id]);
+  const absent = members.filter((m) => ev.presences && ev.presences[m.id] === false);
+  const href = mapsHref(ev);
+  return (
+    <Modal title={ev.name} onClose={onClose} wide>
+      <div className="detail-row">
+        <span className="status" style={{ background: s.bg, color: s.fg }}><i style={{ background: s.dot }} />{st}</span>
+        <span>{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</span>
+        {isAdmin && <button className="btn ghost small" onClick={onEdit}>{Icon.gear({})} Editar</button>}
+      </div>
+      {ev.description && <p className="desc">{ev.description}</p>}
+      {(ev.location || href) && (
+        <p className="loc-line">{Icon.pin({})} {ev.location || "Localização"}{" "}
+          {href && <a href={href} target="_blank" rel="noreferrer">Abrir no Google Maps ↗</a>}
+        </p>
+      )}
+      <h4>Presentes ({present.length})</h4>
+      <div className="pill-row">
+        {present.length ? present.map((m) => (
+          <button key={m.id} className="pill on" onClick={() => onMember(m.id)}>{m.name}</button>
+        )) : <span className="hint">Ninguém marcado como presente.</span>}
+      </div>
+      {absent.length > 0 && (
+        <>
+          <h4>Ausentes ({absent.length})</h4>
+          <div className="pill-row">
+            {absent.map((m) => <button key={m.id} className="pill" onClick={() => onMember(m.id)}>{m.name}</button>)}
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
+function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
+  const editing = !!ev;
+  const [f, setF] = useState(() => ({
+    id: ev?.id || uid(),
+    name: ev?.name || "",
+    range: !!ev?.dateEnd,
+    dateStart: ev?.dateStart || todayISO(),
+    dateEnd: ev?.dateEnd || "",
+    description: ev?.description || "",
+    location: ev?.location || "",
+    locationUrl: ev?.locationUrl || "",
+    status: ev?.status || "Por planear",
+    presences: { ...(ev?.presences || {}) },
+  }));
+  const isPast = (f.range && f.dateEnd ? f.dateEnd : f.dateStart) < todayISO();
+  const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  const togglePresence = (id) => setF((o) => ({ ...o, presences: { ...o.presences, [id]: !o.presences[id] } }));
+
+  function submit() {
+    if (!f.name.trim() || !f.dateStart) return;
+    const presences = {};
+    members.forEach((m) => (presences[m.id] = !!f.presences[m.id]));
+    onSave({
+      id: f.id, name: f.name.trim(), dateStart: f.dateStart,
+      dateEnd: f.range && f.dateEnd ? f.dateEnd : null,
+      description: f.description.trim(), location: f.location.trim(),
+      locationUrl: f.locationUrl.trim(), status: f.status, presences,
+    });
+  }
+
+  return (
+    <Modal title={editing ? "Editar evento" : "Novo evento"} onClose={onClose} wide>
+      <label>Nome do evento<input value={f.name} onChange={(e) => set("name", e.target.value)} autoFocus /></label>
+      <div className="row">
+        <label className="check"><input type="checkbox" checked={f.range} onChange={(e) => set("range", e.target.checked)} /> Intervalo de datas</label>
+      </div>
+      <div className="row">
+        <label>{f.range ? "Início" : "Data"}<input type="date" value={f.dateStart} onChange={(e) => set("dateStart", e.target.value)} /></label>
+        {f.range && <label>Fim<input type="date" value={f.dateEnd} onChange={(e) => set("dateEnd", e.target.value)} /></label>}
+      </div>
+      <label>Estado
+        {isPast ? (
+          <input value="Concluído (automático — data já passou)" disabled />
+        ) : (
+          <select value={f.status} onChange={(e) => set("status", e.target.value)}>
+            <option>Por planear</option>
+            <option>Planeado</option>
+          </select>
+        )}
+      </label>
+      <label>Descrição (opcional)<textarea rows={2} value={f.description} onChange={(e) => set("description", e.target.value)} /></label>
+      <div className="row">
+        <label>Localização<input placeholder="ex.: Quinta do Zé, Óbidos" value={f.location} onChange={(e) => set("location", e.target.value)} /></label>
+        <label>Link Google Maps (opcional)<input placeholder="https://maps.google.com/…" value={f.locationUrl} onChange={(e) => set("locationUrl", e.target.value)} /></label>
+      </div>
+      <h4>Presenças</h4>
+      {members.length === 0 && <p className="hint">Adiciona membros primeiro no separador Membros.</p>}
+      <div className="pill-row">
+        {members.map((m) => (
+          <button key={m.id} type="button" className={`pill ${f.presences[m.id] ? "on" : ""}`} onClick={() => togglePresence(m.id)}>
+            {m.name} {f.presences[m.id] ? "· S" : "· N"}
+          </button>
+        ))}
+      </div>
+      <div className="actions">
+        {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
+        <button className="btn ember" onClick={submit}>Guardar evento</button>
+      </div>
+    </Modal>
+  );
+}
+
+function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
+  return (
+    <Modal title={mb.name} onClose={onClose} wide>
+      <div className="detail-grid">
+        <div><span className="klabel">Cargo</span>{role?.label || "Sem cargo"}</div>
+        <div><span className="klabel">Nascimento</span>{fmtDate(mb.birthDate)}</div>
+        <div><span className="klabel">No Grill desde</span>{fmtDate(mb.joinDate)}</div>
+        <div><span className="klabel">Presenças</span>{row ? `${row.pct}% (${row.present}/${row.total})` : "—"}</div>
+      </div>
+      <h4>Eventos em que esteve presente ({attended.length})</h4>
+      {attended.length === 0 && <p className="hint">Ainda sem presenças registadas.</p>}
+      <div className="mini-list">
+        {attended.map((e) => (
+          <button key={e.id} className="mini-item" onClick={() => onEvent(e.id)}>
+            <span>{e.name}</span><span className="mini-date">{fmtDate(e.dateStart)}</span>
+          </button>
+        ))}
+      </div>
+    </Modal>
+  );
+}
+
+function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
+  const editing = !!mb;
+  const [f, setF] = useState(() => ({
+    id: mb?.id || uid(), name: mb?.name || "",
+    birthDate: mb?.birthDate || "", joinDate: mb?.joinDate || todayISO(),
+    roleId: mb?.roleId || "",
+  }));
+  const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  return (
+    <Modal title={editing ? "Editar membro" : "Novo membro"} onClose={onClose}>
+      <label>Nome<input value={f.name} onChange={(e) => set("name", e.target.value)} autoFocus /></label>
+      <div className="row">
+        <label>Data de nascimento<input type="date" value={f.birthDate} onChange={(e) => set("birthDate", e.target.value)} /></label>
+        <label>Integração no Grill<input type="date" value={f.joinDate} onChange={(e) => set("joinDate", e.target.value)} /></label>
+      </div>
+      <label>Cargo
+        <select value={f.roleId} onChange={(e) => set("roleId", e.target.value)}>
+          <option value="">Sem cargo</option>
+          {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+        </select>
+      </label>
+      <div className="actions">
+        {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
+        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...f, name: f.name.trim(), roleId: f.roleId || null })}>Guardar membro</button>
+      </div>
+    </Modal>
+  );
+}
+
+function RoleFormModal({ roles, onSave, onClose }) {
+  const [label, setLabel] = useState("");
+  const [relation, setRelation] = useState("abaixo");
+  const [refId, setRefId] = useState(roles[0]?.id || "");
+  return (
+    <Modal title="Novo cargo" onClose={onClose}>
+      <label>Nome do cargo<input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus placeholder="ex.: Mestre da Brasa" /></label>
+      {roles.length > 0 && (
+        <div className="row">
+          <label>Posição
+            <select value={relation} onChange={(e) => setRelation(e.target.value)}>
+              <option value="acima">Acima de</option>
+              <option value="igual">Igual a</option>
+              <option value="abaixo">Abaixo de</option>
+            </select>
+          </label>
+          <label>Cargo de referência
+            <select value={refId} onChange={(e) => setRefId(e.target.value)}>
+              {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+      <div className="actions">
+        <button className="btn ember" disabled={!label.trim()} onClick={() => onSave(label, relation, refId)}>Adicionar cargo</button>
+      </div>
+    </Modal>
+  );
+}
+
+function AdminPanel({ data, isMain, currentUser, onAddUser, onToggleAdmin, onRemoveUser }) {
+  const [u, setU] = useState(""); const [p, setP] = useState(""); const [adm, setAdm] = useState(false); const [err, setErr] = useState(null);
+  return (
+    <section>
+      <div className="section-head"><h2>Gestão de utilizadores</h2></div>
+      {isMain ? (
+        <div className="card admin-card">
+          <h4>Criar novo utilizador</h4>
+          <div className="row">
+            <label>Username<input value={u} onChange={(e) => setU(e.target.value)} /></label>
+            <label>Password<input type="password" value={p} onChange={(e) => setP(e.target.value)} /></label>
+          </div>
+          <label className="check"><input type="checkbox" checked={adm} onChange={(e) => setAdm(e.target.checked)} /> Nomear como ADMIN</label>
+          {err && <p className="err">{err}</p>}
+          <div className="actions">
+            <button className="btn ember" onClick={async () => { const e = await onAddUser(u, p, adm); setErr(e); if (!e) { setU(""); setP(""); setAdm(false); } }}>Criar utilizador</button>
+          </div>
+        </div>
+      ) : (
+        <p className="hint">Apenas o ADMIN principal pode criar utilizadores e nomear ADMINs.</p>
+      )}
+
+      <h4 style={{ marginTop: 24 }}>Utilizadores ({data.users.length})</h4>
+      <div className="mini-list">
+        {data.users.map((usr) => (
+          <div key={usr.id} className="mini-item static">
+            <span>{usr.username} {usr.isMain ? <b className="tag">PRINCIPAL</b> : usr.isAdmin ? <b className="tag">ADMIN</b> : null}</span>
+            {isMain && !usr.isMain && (
+              <span className="row-actions">
+                <button className="btn ghost small" onClick={() => onToggleAdmin(usr.id)}>{usr.isAdmin ? "Remover ADMIN" : "Nomear ADMIN"}</button>
+                <button className="btn danger small" onClick={() => onRemoveUser(usr.id)}>Eliminar</button>
+              </span>
+            )}
+          </div>
+        ))}
+      </div>
+      <p className="hint">Nota: a autenticação corre no browser e os dados são partilhados por todos os visitantes desta app. Não uses passwords que utilizes noutros sítios.</p>
+    </section>
+  );
+}
+
+/* ============================================================
+   Estilos
+   ============================================================ */
+function Style() {
+  return (
+    <style>{`
+      @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap');
+
+      .grill-root {
+        --bg: #17130F;
+        --surface: #211C17;
+        --surface2: #2A241E;
+        --line: #3A322A;
+        --text: #F0E9DF;
+        --muted: #9C9184;
+        --ember: #FF7A3D;
+        --gold: #F5B841;
+        --danger: #D96C5F;
+        min-height: 100vh;
+        background:
+          radial-gradient(1000px 500px at 80% -10%, rgba(255,122,61,.10), transparent 60%),
+          radial-gradient(700px 400px at 0% 100%, rgba(245,184,65,.06), transparent 60%),
+          var(--bg);
+        color: var(--text);
+        font-family: 'Inter', system-ui, sans-serif;
+        font-size: 14.5px;
+      }
+      .grill-center { display:flex; align-items:center; justify-content:center; padding:24px; }
+      .loading { display:flex; gap:10px; align-items:center; color:var(--ember); font-weight:600; }
+
+      h1,h2,h3 { font-family:'Bebas Neue','Arial Narrow',sans-serif; letter-spacing:.06em; font-weight:400; margin:0; }
+      h1 { font-size:26px; } h1 em { color:var(--ember); font-style:normal; }
+      h2 { font-size:24px; } h3 { font-size:20px; }
+      h4 { margin:18px 0 8px; font-size:12px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted); }
+
+      .topbar { display:flex; align-items:center; justify-content:space-between; padding:14px 20px; border-bottom:1px solid var(--line); background:rgba(23,19,15,.85); position:sticky; top:0; z-index:20; backdrop-filter:blur(6px); }
+      .brand { display:flex; align-items:center; gap:10px; }
+      .brand-flame { color:var(--ember); display:flex; filter:drop-shadow(0 0 8px rgba(255,122,61,.6)); }
+      .brand-flame.big { justify-content:center; margin-bottom:6px; }
+      .topbar-right { display:flex; gap:10px; align-items:center; }
+      .userchip { color:var(--muted); font-size:13px; }
+      .userchip b { margin-left:8px; color:var(--gold); font-size:10px; letter-spacing:.1em; border:1px solid var(--gold); border-radius:4px; padding:2px 6px; }
+
+      .layout { display:flex; min-height:calc(100vh - 61px); }
+      .sidebar { width:180px; padding:18px 12px; border-right:1px solid var(--line); display:flex; flex-direction:column; gap:4px; flex-shrink:0; }
+      .navbtn { text-align:left; background:none; border:none; color:var(--muted); padding:10px 12px; border-radius:8px; cursor:pointer; font:inherit; font-weight:500; border-left:3px solid transparent; }
+      .navbtn:hover { color:var(--text); background:var(--surface); }
+      .navbtn.active { color:var(--text); background:var(--surface); border-left-color:var(--ember); }
+      .content { flex:1; padding:24px 28px; max-width:960px; }
+
+      .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
+      .head-actions { display:flex; gap:10px; align-items:center; }
+      .segmented { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+      .segmented button { background:none; border:none; color:var(--muted); padding:7px 12px; cursor:pointer; font:inherit; font-size:13px; }
+      .segmented button.on { background:var(--surface2); color:var(--text); }
+
+      .btn { border:none; border-radius:8px; padding:9px 14px; font:inherit; font-weight:600; cursor:pointer; }
+      .btn.ember { background:linear-gradient(135deg,var(--ember),#E85D1F); color:#1A0F08; }
+      .btn.ember:hover { filter:brightness(1.1); }
+      .btn.ghost { background:none; border:1px solid var(--line); color:var(--text); }
+      .btn.danger { background:none; border:1px solid var(--danger); color:var(--danger); }
+      .btn.small { padding:5px 10px; font-size:12px; }
+      .btn:disabled { opacity:.45; cursor:not-allowed; }
+      .iconbtn { background:none; border:none; color:var(--muted); cursor:pointer; padding:4px; border-radius:6px; display:inline-flex; }
+      .iconbtn:hover { color:var(--ember); background:var(--surface2); }
+
+      .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; }
+      .cards { display:flex; flex-direction:column; gap:10px; }
+      .cards.grid2 { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
+      .event-card { cursor:pointer; transition:border-color .15s; }
+      .event-card:hover { border-color:var(--ember); }
+      .event-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+      .event-top strong { font-size:15.5px; }
+      .event-date { color:var(--muted); font-size:13px; margin-top:2px; }
+      .event-meta { display:flex; gap:12px; align-items:center; margin-top:10px; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+      .status { display:inline-flex; align-items:center; gap:6px; padding:3px 9px; border-radius:20px; font-size:11.5px; font-weight:600; }
+      .status i { width:6px; height:6px; border-radius:50%; }
+      .loc { display:inline-flex; align-items:center; gap:4px; }
+
+      /* Friso temporal — o "espeto" */
+      .skewer { position:relative; padding:10px 0 30px; }
+      .skewer::before { content:''; position:absolute; left:50%; top:0; bottom:0; width:3px; transform:translateX(-50%);
+        background:linear-gradient(180deg, var(--line), var(--ember) 50%, var(--line)); border-radius:2px; }
+      .skewer-item { position:relative; width:calc(50% - 30px); margin-bottom:22px; }
+      .skewer-item.left { margin-right:auto; text-align:right; }
+      .skewer-item.right { margin-left:auto; }
+      .skewer-dot { position:absolute; top:24px; width:13px; height:13px; border-radius:50%; border:3px solid var(--bg); box-shadow:0 0 10px rgba(255,122,61,.5); }
+      .skewer-item.left .skewer-dot { right:-37px; }
+      .skewer-item.right .skewer-dot { left:-37px; }
+      .skewer-date { font-family:'Bebas Neue','Arial Narrow',sans-serif; letter-spacing:.06em; color:var(--gold); margin-bottom:6px; font-size:15px; }
+      .event-card.compact .event-top { justify-content:space-between; }
+      .skewer-item.left .event-top { flex-direction:row-reverse; }
+      .skewer-item.left .event-meta { justify-content:flex-end; }
+
+      /* Scoreboard */
+      .board { display:flex; flex-direction:column; gap:8px; }
+      .board-row { display:grid; grid-template-columns:34px 1fr 2fr 52px 56px; align-items:center; gap:12px;
+        background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer; color:var(--text); font:inherit; text-align:left; }
+      .board-row:hover { border-color:var(--ember); }
+      .rank { font-family:'Bebas Neue','Arial Narrow',sans-serif; font-size:19px; color:var(--muted); text-align:center; }
+      .rank.r1 { color:var(--gold); } .rank.r2 { color:#C8C2B8; } .rank.r3 { color:#C68B59; }
+      .board-name { font-weight:600; }
+      .board-bar { height:9px; background:var(--surface2); border-radius:6px; overflow:hidden; }
+      .board-bar i { display:block; height:100%; background:linear-gradient(90deg,#E85D1F,var(--ember),var(--gold)); border-radius:6px; box-shadow:0 0 8px rgba(255,122,61,.5); }
+      .board-pct { font-weight:700; color:var(--ember); text-align:right; }
+      .board-count { color:var(--muted); font-size:12px; text-align:right; }
+
+      /* Membros */
+      .member-card { display:flex; align-items:center; gap:12px; cursor:pointer; }
+      .member-card:hover { border-color:var(--ember); }
+      .avatar { width:40px; height:40px; border-radius:50%; background:linear-gradient(135deg,var(--ember),var(--gold)); color:#1A0F08;
+        display:flex; align-items:center; justify-content:center; font-family:'Bebas Neue',sans-serif; font-size:20px; flex-shrink:0; }
+      .member-info { display:flex; flex-direction:column; flex:1; }
+      .member-info span { color:var(--muted); font-size:12.5px; }
+
+      /* Hierarquia */
+      .tree { display:flex; flex-direction:column; align-items:center; }
+      .tier { display:flex; flex-direction:column; align-items:center; }
+      .tier-link { width:2px; height:26px; background:var(--line); }
+      .tier-roles { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+      .role-chip { background:var(--surface); border:1px solid var(--gold); color:var(--text); border-radius:10px; padding:10px 16px; font-weight:600; display:flex; gap:8px; align-items:center; }
+      .role-count { background:var(--surface2); color:var(--muted); border-radius:12px; padding:1px 8px; font-size:11.5px; }
+      .chip-x { background:none; border:none; color:var(--muted); cursor:pointer; font-size:15px; padding:0 2px; }
+      .chip-x:hover { color:var(--danger); }
+
+      /* Modais e formulários */
+      .overlay { position:fixed; inset:0; background:rgba(10,8,6,.7); display:flex; align-items:center; justify-content:center; padding:20px; z-index:50; backdrop-filter:blur(3px); }
+      .modal { background:var(--surface); border:1px solid var(--line); border-radius:14px; width:100%; max-width:420px; max-height:88vh; display:flex; flex-direction:column; }
+      .modal.wide { max-width:600px; }
+      .modal-head { display:flex; justify-content:space-between; align-items:center; padding:16px 20px; border-bottom:1px solid var(--line); }
+      .modal-body { padding:18px 20px 22px; overflow-y:auto; }
+      label { display:flex; flex-direction:column; gap:5px; margin-bottom:12px; font-size:12.5px; color:var(--muted); font-weight:500; flex:1; }
+      label.check { flex-direction:row; align-items:center; gap:8px; color:var(--text); }
+      input, select, textarea { background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:9px 11px; color:var(--text); font:inherit; }
+      input:focus, select:focus, textarea:focus { outline:none; border-color:var(--ember); }
+      .row { display:flex; gap:12px; }
+      .actions { display:flex; justify-content:flex-end; gap:10px; margin-top:14px; }
+      .err { color:var(--danger); font-size:13px; margin:4px 0; }
+      .hint { color:var(--muted); font-size:12.5px; margin-top:14px; }
+      .empty { color:var(--muted); padding:30px 0; text-align:center; }
+
+      .pill-row { display:flex; flex-wrap:wrap; gap:8px; }
+      .pill { background:var(--surface2); border:1px solid var(--line); border-radius:20px; padding:6px 13px; color:var(--muted); cursor:pointer; font:inherit; font-size:13px; }
+      .pill.on { background:rgba(255,122,61,.15); border-color:var(--ember); color:var(--ember); font-weight:600; }
+      .pill:hover { border-color:var(--ember); }
+
+      .detail-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+      .desc { color:var(--text); margin:8px 0; }
+      .loc-line { display:flex; align-items:center; gap:6px; color:var(--muted); }
+      .loc-line a { color:var(--ember); text-decoration:none; }
+      .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+      .klabel { display:block; font-size:11px; text-transform:uppercase; letter-spacing:.1em; color:var(--muted); margin-bottom:2px; }
+
+      .mini-list { display:flex; flex-direction:column; gap:6px; }
+      .mini-item { display:flex; justify-content:space-between; align-items:center; background:var(--surface2); border:1px solid var(--line); border-radius:8px; padding:10px 13px; color:var(--text); font:inherit; cursor:pointer; text-align:left; }
+      .mini-item:hover { border-color:var(--ember); }
+      .mini-item.static { cursor:default; }
+      .mini-item.static:hover { border-color:var(--line); }
+      .mini-date { color:var(--muted); font-size:12px; }
+      .tag { color:var(--gold); font-size:10px; letter-spacing:.08em; border:1px solid var(--gold); border-radius:4px; padding:1px 5px; margin-left:6px; }
+      .row-actions { display:flex; gap:8px; }
+
+      .bootstrap { max-width:360px; width:100%; text-align:center; display:flex; flex-direction:column; gap:6px; padding:30px 26px; }
+      .bootstrap p { color:var(--muted); margin:4px 0 14px; }
+      .bootstrap label { text-align:left; }
+
+      .toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%); background:var(--surface2); border:1px solid var(--ember); color:var(--text); padding:11px 20px; border-radius:10px; z-index:100; box-shadow:0 6px 24px rgba(0,0,0,.4); }
+
+      @media (max-width: 760px) {
+        .layout { flex-direction:column; }
+        .sidebar { width:auto; flex-direction:row; overflow-x:auto; border-right:none; border-bottom:1px solid var(--line); padding:10px 12px; }
+        .navbtn { border-left:none; border-bottom:2px solid transparent; white-space:nowrap; }
+        .navbtn.active { border-bottom-color:var(--ember); }
+        .content { padding:18px 14px; }
+        .skewer::before { left:10px; }
+        .skewer-item, .skewer-item.left, .skewer-item.right { width:auto; margin:0 0 20px 34px; text-align:left; }
+        .skewer-item.left .skewer-dot, .skewer-item.right .skewer-dot { left:-31px; right:auto; }
+        .skewer-item.left .event-top { flex-direction:row; }
+        .skewer-item.left .event-meta { justify-content:flex-start; }
+        .board-row { grid-template-columns:28px 1fr 60px; }
+        .board-bar, .board-count { display:none; }
+        .row { flex-direction:column; gap:0; }
+        .detail-grid { grid-template-columns:1fr; }
+      }
+      @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
+    `}</style>
+  );
+}
