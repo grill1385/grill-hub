@@ -31,13 +31,15 @@ function eventEndDate(ev) {
 }
 
 function getStatus(ev) {
+  if (ev.status === "Concluído") return "Concluído";
   if (eventEndDate(ev) && eventEndDate(ev) < todayISO()) return "Concluído";
+  if (ev.status === "Planeado") return "Agendado"; // compatibilidade com dados antigos
   return ev.status || "Por planear";
 }
 
 const STATUS_STYLE = {
   "Concluído": { bg: "#2E3B2E", fg: "#9BC98F", dot: "#7FB069" },
-  "Planeado": { bg: "#3B3220", fg: "#F5C168", dot: "#F5B841" },
+  "Agendado": { bg: "#3B3220", fg: "#F5C168", dot: "#F5B841" },
   "Por planear": { bg: "#3A2C26", fg: "#F09A6A", dot: "#FF7A3D" },
 };
 
@@ -198,20 +200,26 @@ export default function App() {
     showToast("Membro eliminado.");
   }
 
-  function addRole(label, relation, refRoleId) {
-    let level = 0;
-    if (data.roles.length && refRoleId) {
-      const ref = data.roles.find((r) => r.id === refRoleId);
-      level = relation === "acima" ? ref.level - 1 : relation === "abaixo" ? ref.level + 1 : ref.level;
+  function saveRole(roleId, label, relation, refRoleId) {
+    const existing = data.roles.find((r) => r.id === roleId);
+    const others = data.roles.filter((r) => r.id !== roleId);
+    let level = existing ? existing.level : 0;
+    if (relation !== "manter" && others.length && refRoleId) {
+      const ref = others.find((r) => r.id === refRoleId);
+      if (ref) level = relation === "acima" ? ref.level - 1 : relation === "abaixo" ? ref.level + 1 : ref.level;
     }
-    save({ ...data, roles: [...data.roles, { id: uid(), label: label.trim(), level }] });
+    const roles = existing
+      ? data.roles.map((r) => (r.id === roleId ? { ...r, label: label.trim(), level } : r))
+      : [...data.roles, { id: uid(), label: label.trim(), level }];
+    save({ ...data, roles });
     setModal(null);
-    showToast("Cargo adicionado.");
+    showToast(existing ? "Cargo atualizado." : "Cargo adicionado.");
   }
 
   function deleteRole(id) {
     const members = data.members.map((m) => (m.roleId === id ? { ...m, roleId: null } : m));
     save({ ...data, roles: data.roles.filter((r) => r.id !== id), members });
+    setModal(null);
     showToast("Cargo eliminado.");
   }
 
@@ -354,7 +362,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <p className="hint">Percentagem calculada sobre eventos concluídos desde a data de integração de cada membro.</p>
+              <p className="hint">Percentagem calculada sobre eventos concluídos desde a data de integração de cada membro (sem data de integração, contam todos).</p>
             </section>
           )}
 
@@ -400,7 +408,11 @@ export default function App() {
                         <div key={r.id} className="role-chip">
                           {r.label}
                           <span className="role-count">{data.members.filter((m) => m.roleId === r.id).length}</span>
-                          {isAdmin && <button className="chip-x" onClick={() => deleteRole(r.id)} title="Eliminar cargo">×</button>}
+                          {isAdmin && (
+                            <button className="iconbtn" title="Editar cargo" onClick={() => setModal({ type: "roleForm", id: r.id })}>
+                              {Icon.gear({ width: 13, height: 13 })}
+                            </button>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -449,7 +461,8 @@ export default function App() {
       )}
 
       {modal?.type === "roleForm" && (
-        <RoleFormModal roles={data.roles} onSave={addRole} onClose={() => setModal(null)} />
+        <RoleFormModal roles={data.roles} role={data.roles.find((r) => r.id === modal.id)}
+          onSave={saveRole} onDelete={deleteRole} onClose={() => setModal(null)} />
       )}
 
       {toast && <div className="toast">{toast}</div>}
@@ -579,7 +592,7 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
     description: ev?.description || "",
     location: ev?.location || "",
     locationUrl: ev?.locationUrl || "",
-    status: ev?.status || "Por planear",
+    status: ev?.status === "Planeado" ? "Agendado" : (ev?.status || "Por planear"),
     presences: { ...(ev?.presences || {}) },
   }));
   const isPast = (f.range && f.dateEnd ? f.dateEnd : f.dateStart) < todayISO();
@@ -614,7 +627,8 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
         ) : (
           <select value={f.status} onChange={(e) => set("status", e.target.value)}>
             <option>Por planear</option>
-            <option>Planeado</option>
+            <option>Agendado</option>
+            <option>Concluído</option>
           </select>
         )}
       </label>
@@ -666,7 +680,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
   const editing = !!mb;
   const [f, setF] = useState(() => ({
     id: mb?.id || uid(), name: mb?.name || "",
-    birthDate: mb?.birthDate || "", joinDate: mb?.joinDate || todayISO(),
+    birthDate: mb?.birthDate || "", joinDate: mb?.joinDate || "",
     roleId: mb?.roleId || "",
   }));
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
@@ -691,31 +705,39 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
   );
 }
 
-function RoleFormModal({ roles, onSave, onClose }) {
-  const [label, setLabel] = useState("");
-  const [relation, setRelation] = useState("abaixo");
-  const [refId, setRefId] = useState(roles[0]?.id || "");
+function RoleFormModal({ roles, role, onSave, onDelete, onClose }) {
+  const editing = !!role;
+  const others = roles.filter((r) => r.id !== role?.id);
+  const [label, setLabel] = useState(role?.label || "");
+  const [relation, setRelation] = useState(editing ? "manter" : "abaixo");
+  const [refId, setRefId] = useState(others[0]?.id || "");
   return (
-    <Modal title="Novo cargo" onClose={onClose}>
+    <Modal title={editing ? "Editar cargo" : "Novo cargo"} onClose={onClose}>
       <label>Nome do cargo<input value={label} onChange={(e) => setLabel(e.target.value)} autoFocus placeholder="ex.: Mestre da Brasa" /></label>
-      {roles.length > 0 && (
+      {others.length > 0 && (
         <div className="row">
           <label>Posição
             <select value={relation} onChange={(e) => setRelation(e.target.value)}>
+              {editing && <option value="manter">Manter posição</option>}
               <option value="acima">Acima de</option>
               <option value="igual">Igual a</option>
               <option value="abaixo">Abaixo de</option>
             </select>
           </label>
-          <label>Cargo de referência
-            <select value={refId} onChange={(e) => setRefId(e.target.value)}>
-              {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
-            </select>
-          </label>
+          {relation !== "manter" && (
+            <label>Cargo de referência
+              <select value={refId} onChange={(e) => setRefId(e.target.value)}>
+                {others.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
+              </select>
+            </label>
+          )}
         </div>
       )}
       <div className="actions">
-        <button className="btn ember" disabled={!label.trim()} onClick={() => onSave(label, relation, refId)}>Adicionar cargo</button>
+        {editing && <button className="btn danger" onClick={() => onDelete(role.id)}>Eliminar</button>}
+        <button className="btn ember" disabled={!label.trim()} onClick={() => onSave(role?.id ?? null, label, relation, refId)}>
+          {editing ? "Guardar cargo" : "Adicionar cargo"}
+        </button>
       </div>
     </Modal>
   );
