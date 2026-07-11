@@ -21,6 +21,8 @@ function fmtDate(iso) {
   return `${d}/${m}/${y}`;
 }
 
+const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} €`;
+
 function eventEndDate(ev) {
   return ev.dateEnd || ev.dateStart;
 }
@@ -85,6 +87,9 @@ export default function App() {
   const isMain = !!adminRow?.is_main;
   const myMember = data?.members?.find((m) => (m.email || "").toLowerCase() === myEmail) || null;
   const avatarSrc = myMember?.avatarUrl || session?.user?.user_metadata?.avatar_url || null;
+  const pendingProfiles = isAdmin
+    ? (data?.profiles || []).filter((pr) => !data.members.some((m) => (m.email || "").toLowerCase() === pr.email))
+    : [];
 
   /* ---------- Carregar dados e sessão ---------- */
   useEffect(() => {
@@ -93,7 +98,7 @@ export default function App() {
         setData(await api.loadAll());
       } catch (e) {
         console.error(e);
-        setData({ admins: [], members: [], events: [], roles: [] });
+        setData({ admins: [], members: [], events: [], roles: [], purchases: [], profiles: [] });
       }
       setLoading(false);
     })();
@@ -105,6 +110,11 @@ export default function App() {
     });
     return () => sub.subscription.unsubscribe();
   }, []);
+
+  useEffect(() => {
+    if (!session) return;
+    api.loadAll().then(setData).catch(() => {});
+  }, [session?.user?.id]);
 
   function showToast(msg) {
     setToast(msg);
@@ -283,6 +293,46 @@ export default function App() {
     } catch { showToast("Não foi possível guardar o perfil."); }
   }
 
+  async function savePurchase(pu) {
+    try {
+      await api.savePurchase(pu);
+      const purchases = data.purchases.some((p) => p.id === pu.id)
+        ? data.purchases.map((p) => (p.id === pu.id ? pu : p))
+        : [...data.purchases, pu];
+      setData({ ...data, purchases });
+      setModal({ type: "eventDetail", id: pu.eventId });
+      showToast("Compra guardada.");
+    } catch { showToast("Não foi possível guardar a compra."); }
+  }
+
+  async function deletePurchase(pu) {
+    try {
+      await api.deletePurchase(pu.id);
+      setData({ ...data, purchases: data.purchases.filter((p) => p.id !== pu.id) });
+      setModal({ type: "eventDetail", id: pu.eventId });
+      showToast("Compra eliminada.");
+    } catch { showToast("Não foi possível eliminar a compra."); }
+  }
+
+  async function toggleSettled(pu, memberId) {
+    const next = { ...pu, settled: { ...pu.settled, [memberId]: !pu.settled[memberId] } };
+    try {
+      await api.savePurchase(next);
+      setData({ ...data, purchases: data.purchases.map((p) => (p.id === pu.id ? next : p)) });
+    } catch { showToast("Não foi possível atualizar."); }
+  }
+
+  async function linkAccount(memberId, email) {
+    const member = data.members.find((m) => m.id === memberId);
+    if (!member) return;
+    const next = { ...member, email: email.toLowerCase() };
+    try {
+      await api.saveMember(next);
+      setData({ ...data, members: data.members.map((m) => (m.id === memberId ? next : m)) });
+      showToast("Conta associada ao membro.");
+    } catch { showToast("Não foi possível associar."); }
+  }
+
   /* ---------- Render ---------- */
   if (loading) {
     return (
@@ -334,6 +384,7 @@ export default function App() {
           ].map(([id, label]) => (
             <button key={id} className={`navbtn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
               {label}
+              {id === "admin" && pendingProfiles.length > 0 && <span className="badge">{pendingProfiles.length}</span>}
             </button>
           ))}
         </nav>
@@ -471,7 +522,8 @@ export default function App() {
           )}
 
           {tab === "admin" && isAdmin && (
-            <AdminPanel admins={data.admins} isMain={isMain}
+            <AdminPanel admins={data.admins} isMain={isMain} pendingProfiles={pendingProfiles}
+              members={data.members} onLink={linkAccount}
               onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin} />
           )}
         </main>
@@ -488,9 +540,13 @@ export default function App() {
         const ev = data.events.find((e) => e.id === modal.id);
         if (!ev) return null;
         return <EventDetailModal ev={ev} members={data.members} isAdmin={isAdmin} myMember={myMember}
+          purchases={data.purchases.filter((p) => p.eventId === ev.id)}
           onEdit={() => setModal({ type: "eventForm", id: ev.id })}
           onMember={(id) => setModal({ type: "memberDetail", id })}
           onConfirm={() => toggleConfirmation(ev)}
+          onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
+          onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
+          onToggleSettled={toggleSettled}
           onClose={() => setModal(null)} />;
       })()}
 
@@ -512,6 +568,15 @@ export default function App() {
         <MemberFormModal mb={data.members.find((m) => m.id === modal.id)} roles={data.roles}
           onSave={upsertMember} onDelete={deleteMember} onClose={() => setModal(null)} />
       )}
+
+      {modal?.type === "purchaseForm" && (() => {
+        const ev = data.events.find((e) => e.id === modal.eventId);
+        if (!ev) return null;
+        const pu = data.purchases.find((p) => p.id === modal.id);
+        return <PurchaseFormModal ev={ev} purchase={pu} members={data.members}
+          onSave={savePurchase} onDelete={deletePurchase}
+          onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
+      })()}
 
       {modal?.type === "roleForm" && (
         <RoleFormModal roles={data.roles} role={data.roles.find((r) => r.id === modal.id)}
@@ -583,7 +648,7 @@ function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfir
   return (
     <section className="home2">
       <div className="tl-labels">
-        <h4>{k === 0 ? "Último evento concluído" : `Linha temporal · ${k} para trás`}</h4>
+        <h4>{k === 0 ? "Últimos eventos" : `Linha temporal · ${k} para trás`}</h4>
         <h4>{k === 0 ? "Próximos eventos" : ""}</h4>
         <h4>{k === 0 ? "Por confirmar" : ""}</h4>
       </div>
@@ -652,6 +717,7 @@ function ProfileModal({ myMember, email, onSave, onClose }) {
     avatarUrl: myMember?.avatarUrl || "",
     newPassword: "",
   }));
+  const [uploading, setUploading] = useState(false);
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
   return (
     <Modal title="A minha área" onClose={onClose}>
@@ -663,7 +729,22 @@ function ProfileModal({ myMember, email, onSave, onClose }) {
         <>
           <label>Username (tag pública)<input value={f.username} onChange={(e) => set("username", e.target.value)} placeholder="ex.: mestre-da-brasa" /></label>
           <label>Data de nascimento<input type="date" value={f.birthDate} onChange={(e) => set("birthDate", e.target.value)} /></label>
-          <label>Imagem de perfil (URL)<input value={f.avatarUrl} onChange={(e) => set("avatarUrl", e.target.value)} placeholder="https://…" /></label>
+          <label>Imagem de perfil (upload)
+            <input type="file" accept="image/*" onChange={async (e) => {
+              const file = e.target.files[0];
+              if (!file) return;
+              setUploading(true);
+              try {
+                const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+                const url = await api.uploadFile(`avatars/${myMember.id}-${Date.now()}.${ext}`, file);
+                set("avatarUrl", url);
+              } catch { /* falha silenciosa; mantém anterior */ }
+              setUploading(false);
+            }} />
+          </label>
+          {uploading && <p className="hint">A carregar imagem…</p>}
+          {f.avatarUrl && <img src={f.avatarUrl} alt="" style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--line)" }} />}
+          <label style={{ marginTop: 10 }}>Ou URL da imagem<input value={f.avatarUrl} onChange={(e) => set("avatarUrl", e.target.value)} placeholder="https://…" /></label>
         </>
       ) : (
         <p className="hint">Esta conta ainda não está associada a nenhum membro — pede ao admin para registar este email num membro.</p>
@@ -794,7 +875,23 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, onEdit, onMember, onConfirm, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
+  const owing = {};
+  (purchases || []).forEach((pu) => {
+    const parts = pu.participants || [];
+    const share = parts.length ? Math.round((pu.total / parts.length) * 100) / 100 : 0;
+    parts.forEach((mid) => {
+      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + share;
+    });
+  });
+  const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
+  const mailtoBody = Object.keys(owing).map((id) => {
+    const m = members.find((x) => x.id === id);
+    return `${m?.name || id}: ${eur(owing[id])} em dívida`;
+  }).join("\n");
+  const mailtoHref = owingEmails.length
+    ? `mailto:${owingEmails.join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar: ${ev.name}`)}&body=${encodeURIComponent(`Olá! Há contas por saldar do evento "${ev.name}":\n\n${mailtoBody}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`
+    : null;
   const st = getStatus(ev); const s = STATUS_STYLE[st];
   const present = members.filter((m) => ev.presences?.[m.id]);
   const absent = members.filter((m) => ev.presences && ev.presences[m.id] === false);
@@ -846,6 +943,55 @@ function EventDetailModal({ ev, members, isAdmin, myMember, onEdit, onMember, on
             </div>
           )}
         </>
+      )}
+
+      <h4>Contas</h4>
+      {(!purchases || purchases.length === 0) && <p className="hint">Sem contas.</p>}
+      {(purchases || []).map((pu) => {
+        const parts = pu.participants || [];
+        const share = parts.length ? Math.round((pu.total / parts.length) * 100) / 100 : 0;
+        const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
+        const totalSettled = Math.min(pu.total, Math.round(share * parts.filter(isSet).length * 100) / 100);
+        const payer = members.find((m) => m.id === pu.payerId);
+        return (
+          <div key={pu.id} className="purchase">
+            <div className="purchase-head">
+              <strong>{pu.description}</strong>
+              <span className="purchase-total">{eur(pu.total)}</span>
+              {isAdmin && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
+            </div>
+            <div className="hint" style={{ marginTop: 0 }}>
+              Pagar a <b>{payer?.name || "?"}</b> · {eur(share)} por pessoa · saldado {eur(totalSettled)} de {eur(pu.total)}
+            </div>
+            <div className="pill-row">
+              {parts.map((mid) => {
+                const m = members.find((x) => x.id === mid);
+                if (!m) return null;
+                const done = isSet(mid);
+                return (
+                  <button key={mid} className={`pill ${done ? "on" : ""}`}
+                    title={mid === pu.payerId ? "Pagou a compra" : isAdmin ? "Alternar saldado" : ""}
+                    onClick={() => isAdmin && mid !== pu.payerId && onToggleSettled(pu, mid)}>
+                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(share)}`}
+                  </button>
+                );
+              })}
+            </div>
+            {pu.receipts?.length > 0 && (
+              <div className="receipts">
+                {pu.receipts.map((u, i) => (
+                  <a key={i} href={u} target="_blank" rel="noreferrer"><img src={u} alt={`fatura ${i + 1}`} /></a>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+      {isAdmin && (
+        <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <button className="btn ghost small" onClick={onAddPurchase}>+ Compra</button>
+          {mailtoHref && <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>}
+        </div>
       )}
     </Modal>
   );
@@ -986,6 +1132,82 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
   );
 }
 
+function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose }) {
+  const editing = !!purchase;
+  const defaultParts = useMemo(() => {
+    if (purchase) return purchase.participants;
+    const st = getStatus(ev);
+    const src = st === "Concluído" ? ev.presences : (Object.values(ev.confirmations || {}).some(Boolean) ? ev.confirmations : null);
+    if (src) {
+      const ids = members.filter((m) => src[m.id]).map((m) => m.id);
+      if (ids.length) return ids;
+    }
+    return members.map((m) => m.id);
+  }, [purchase, ev, members]);
+  const [f, setF] = useState(() => ({
+    id: purchase?.id || uid(),
+    description: purchase?.description || "",
+    total: purchase?.total ?? "",
+    payerId: purchase?.payerId || members[0]?.id || "",
+    participants: defaultParts,
+    settled: { ...(purchase?.settled || {}) },
+    receipts: [...(purchase?.receipts || [])],
+  }));
+  const [files, setFiles] = useState([]);
+  const [busy, setBusy] = useState(false);
+  const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  const toggleP = (id) =>
+    set("participants", f.participants.includes(id) ? f.participants.filter((x) => x !== id) : [...f.participants, id]);
+  const share = f.participants.length && Number(f.total) > 0
+    ? Math.round((Number(f.total) / f.participants.length) * 100) / 100 : 0;
+
+  async function submit() {
+    if (!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length) return;
+    setBusy(true);
+    try {
+      let receipts = f.receipts;
+      for (const file of files) {
+        const ext = (file.name.split(".").pop() || "jpg").toLowerCase();
+        const url = await api.uploadFile(`receipts/${ev.id}/${f.id}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}.${ext}`, file);
+        receipts = [...receipts, url];
+      }
+      onSave({
+        id: f.id, eventId: ev.id, description: f.description.trim(),
+        total: Math.round(Number(f.total) * 100) / 100,
+        payerId: f.payerId, participants: f.participants, settled: f.settled, receipts,
+      });
+    } catch { setBusy(false); }
+  }
+
+  return (
+    <Modal title={editing ? "Editar compra" : "Nova compra"} onClose={onClose} wide>
+      <label>Descrição<input value={f.description} onChange={(e) => set("description", e.target.value)} autoFocus placeholder="ex.: Carne para o churrasco" /></label>
+      <div className="row">
+        <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
+        <label>Quem pagou (a quem devem)
+          <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
+            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+      </div>
+      <h4>Dividir por {f.participants.length} pessoa(s){share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
+      <div className="pill-row">
+        {members.map((m) => (
+          <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
+        ))}
+      </div>
+      <label style={{ marginTop: 14 }}>Fotos da fatura (opcional)
+        <input type="file" accept="image/*" multiple onChange={(e) => setFiles([...e.target.files])} />
+      </label>
+      {f.receipts.length > 0 && <p className="hint">{f.receipts.length} foto(s) já carregada(s).</p>}
+      <div className="actions">
+        {editing && <button className="btn danger" disabled={busy} onClick={() => onDelete(purchase)}>Eliminar</button>}
+        <button className="btn ember" disabled={busy} onClick={submit}>{busy ? "A carregar…" : "Guardar compra"}</button>
+      </div>
+    </Modal>
+  );
+}
+
 function RoleFormModal({ roles, role, onSave, onDelete, onClose }) {
   const editing = !!role;
   const others = roles.filter((r) => r.id !== role?.id);
@@ -1024,11 +1246,40 @@ function RoleFormModal({ roles, role, onSave, onDelete, onClose }) {
   );
 }
 
-function AdminPanel({ admins, isMain, onAddAdmin, onRemoveAdmin }) {
+function LinkRow({ profile, members, onLink }) {
+  const [mid, setMid] = useState("");
+  const blanks = members.filter((m) => !m.email);
+  return (
+    <div className="mini-item static">
+      <span>{profile.email}{profile.name ? ` · ${profile.name}` : ""}</span>
+      <span className="row-actions">
+        <select value={mid} onChange={(e) => setMid(e.target.value)}>
+          <option value="">Associar a membro…</option>
+          {blanks.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+        <button className="btn ghost small" disabled={!mid} onClick={() => onLink(mid, profile.email)}>Associar</button>
+      </span>
+    </div>
+  );
+}
+
+function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onAddAdmin, onRemoveAdmin }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   return (
     <section>
-      <div className="section-head"><h2>Gestão de admins</h2></div>
+      <div className="section-head"><h2>Gestão</h2></div>
+
+      <h4>Contas por associar ({pendingProfiles.length})</h4>
+      {pendingProfiles.length === 0 && <p className="hint">Nenhuma conta nova por associar.</p>}
+      {pendingProfiles.length > 0 && members.filter((m) => !m.email).length === 0 && (
+        <p className="hint">Há contas novas mas nenhum membro sem email — cria o membro primeiro ou edita o email de um existente.</p>
+      )}
+      <div className="mini-list">
+        {pendingProfiles.map((pr) => <LinkRow key={pr.id} profile={pr} members={members} onLink={onLink} />)}
+      </div>
+      <p className="hint">Podes corrigir associações a qualquer momento editando o email do membro no separador Membros.</p>
+
+      <div className="section-head" style={{ marginTop: 28 }}><h2>Admins</h2></div>
       {isMain ? (
         <div className="card admin-card">
           <h4>Adicionar admin</h4>
@@ -1266,7 +1517,7 @@ function Style() {
       .tl-card { background:linear-gradient(105deg, var(--surface) 20%, rgba(33,28,23,.45) 100%); border:1px solid var(--line);
         border-radius:14px; padding:16px; cursor:pointer; display:flex; flex-direction:column; gap:8px; min-height:150px;
         transition:border-color .18s, transform .18s, box-shadow .18s; }
-      .tl-card:hover { border-color:var(--ember); transform:translateY(-3px); box-shadow:0 10px 26px rgba(0,0,0,.35); }
+      .tl-card:hover { border-color:var(--ember); transform:translateY(-5px) scale(1.02); box-shadow:0 14px 34px rgba(0,0,0,.45), 0 0 0 1px rgba(255,122,61,.25), 0 0 24px rgba(255,122,61,.12); }
       .tl-card.big { background:var(--surface); height:100%; }
       .tl-card.empty-card { cursor:default; align-items:center; justify-content:center; }
       .tl-card.empty-card:hover { border-color:var(--line); transform:none; box-shadow:none; }
@@ -1279,10 +1530,14 @@ function Style() {
         opacity:0; transition:opacity .2s; pointer-events:none; }
       .tl-left:hover .tl-arrows { opacity:1; pointer-events:auto; }
       .tl-arrows .arrow { width:40px; height:34px; backdrop-filter:blur(4px); background:rgba(42,36,30,.85); }
-      @keyframes slidePast { from { transform:translateX(-36px); opacity:.2; } to { transform:translateX(0); opacity:1; } }
-      @keyframes slideFuture { from { transform:translateX(36px); opacity:.2; } to { transform:translateX(0); opacity:1; } }
-      .tl-row.slide-past { animation:slidePast .32s ease; }
-      .tl-row.slide-future { animation:slideFuture .32s ease; }
+      @keyframes slidePast { from { transform:translateX(-46px) scale(.95); opacity:0; } to { transform:translateX(0) scale(1); opacity:1; } }
+      @keyframes slideFuture { from { transform:translateX(46px) scale(.95); opacity:0; } to { transform:translateX(0) scale(1); opacity:1; } }
+      .tl-row.slide-past .tl-card { animation:slidePast .42s cubic-bezier(.22,1,.36,1) backwards; }
+      .tl-row.slide-future .tl-card { animation:slideFuture .42s cubic-bezier(.22,1,.36,1) backwards; }
+      .tl-row.slide-past .tl-center .tl-card:nth-child(1), .tl-row.slide-future .tl-center .tl-card:nth-child(1) { animation-delay:.06s; }
+      .tl-row.slide-past .tl-center .tl-card:nth-child(2), .tl-row.slide-future .tl-center .tl-card:nth-child(2) { animation-delay:.12s; }
+      .tl-row.slide-past .tl-center .tl-card:nth-child(3), .tl-row.slide-future .tl-center .tl-card:nth-child(3) { animation-delay:.18s; }
+      .tl-row.slide-past .tl-right .tl-card, .tl-row.slide-future .tl-right .tl-card { animation-delay:.24s; }
       .todo-panel2 { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; height:100%;
         box-shadow:0 10px 28px rgba(0,0,0,.3); }
       .podium { display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; }
@@ -1294,6 +1549,16 @@ function Style() {
       .podium-card .board-bar { width:100%; height:8px; background:var(--surface2); border-radius:6px; overflow:hidden; }
       .podium-pct { font-weight:700; color:var(--ember); font-size:14px; }
       .podium-card .rank { font-size:24px; }
+
+      .badge { background:var(--ember); color:#1A0F08; border-radius:10px; font-size:11px; font-weight:700; padding:1px 7px; margin-left:8px; }
+      .purchase { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px; }
+      .purchase-head { display:flex; align-items:center; gap:10px; }
+      .purchase-head strong { flex:1; }
+      .purchase-total { color:var(--gold); font-weight:700; }
+      .receipts { display:flex; gap:8px; flex-wrap:wrap; }
+      .receipts img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
+      .receipts a:hover img { border-color:var(--ember); }
+      input[type="file"] { padding:7px; }
 
       @media (max-width: 760px) {
         .layout { flex-direction:column; }

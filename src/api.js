@@ -34,20 +34,35 @@ const fromEvent = (e) => ({
   location_url: e.locationUrl || null, status: e.status, presences: e.presences || {},
 });
 
+const toPurchase = (r) => ({
+  id: r.id, eventId: r.event_id, description: r.description, total: Number(r.total),
+  payerId: r.payer_member_id, participants: r.participants || [],
+  settled: r.settled || {}, receipts: r.receipts || [],
+});
+const fromPurchase = (p) => ({
+  id: p.id, event_id: p.eventId, description: p.description, total: p.total,
+  payer_member_id: p.payerId || null, participants: p.participants || [],
+  settled: p.settled || {}, receipts: p.receipts || [],
+});
+
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
       supabase.from("admins").select("*"),
+      supabase.from("purchases").select("*"),
+      supabase.from("profiles").select("*"),
     ]);
-    for (const r of [members, events, roles, admins]) if (r.error) throw r.error;
+    for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
       members: members.data.map(toMember),
       events: events.data.map(toEvent),
       roles: roles.data,
       admins: admins.data,
+      purchases: purchases.data.map(toPurchase),
+      profiles: profiles.error ? [] : profiles.data,
     };
   },
   async saveMember(m) { const { error } = await supabase.from("members").upsert(fromMember(m)); if (error) throw error; },
@@ -67,5 +82,13 @@ export const api = {
   async setMyConfirmation(eventId, value) {
     const { error } = await supabase.rpc("set_my_confirmation", { p_event_id: eventId, p_value: value });
     if (error) throw error;
+  },
+  async savePurchase(pu) { const { error } = await supabase.from("purchases").upsert(fromPurchase(pu)); if (error) throw error; },
+  async deletePurchase(id) { const { error } = await supabase.from("purchases").delete().eq("id", id); if (error) throw error; },
+  async uploadFile(path, file) {
+    const { error } = await supabase.storage.from("grill").upload(path, file, { upsert: true });
+    if (error) throw error;
+    const { data } = supabase.storage.from("grill").getPublicUrl(path);
+    return data.publicUrl;
   },
 };

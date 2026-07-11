@@ -1,8 +1,8 @@
-name: Lembretes de eventos
+name: Lembretes de eventos e contas
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # todos os dias às 08:00 UTC (09:00 Lisboa no inverno)
+    - cron: "0 8 * * *"   # todos os dias às 08:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -13,6 +13,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - run: node scripts/send-reminders.mjs
+      - name: Lembretes de eventos (3 dias antes)
+        run: node scripts/send-reminders.mjs
+        env:
+          BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
+      - name: Lembretes de contas por saldar
+        run: node scripts/send-debt-reminders.mjs
         env:
           BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
