@@ -659,6 +659,7 @@ function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
     <Modal title={mb.name} onClose={onClose} wide>
       <div className="detail-grid">
         <div><span className="klabel">Cargo</span>{role?.label || "Sem cargo"}</div>
+        <div><span className="klabel">Email</span>{mb.email || "—"}</div>
         <div><span className="klabel">Nascimento</span>{fmtDate(mb.birthDate)}</div>
         <div><span className="klabel">No Grill desde</span>{fmtDate(mb.joinDate)}</div>
         <div><span className="klabel">Presenças</span>{row ? `${row.pct}% (${row.present}/${row.total})` : "—"}</div>
@@ -680,6 +681,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
   const editing = !!mb;
   const [f, setF] = useState(() => ({
     id: mb?.id || uid(), name: mb?.name || "",
+    email: mb?.email || "",
     birthDate: mb?.birthDate || "", joinDate: mb?.joinDate || "",
     roleId: mb?.roleId || "",
   }));
@@ -687,6 +689,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
   return (
     <Modal title={editing ? "Editar membro" : "Novo membro"} onClose={onClose}>
       <label>Nome<input value={f.name} onChange={(e) => set("name", e.target.value)} autoFocus /></label>
+      <label>Email (para lembretes de eventos)<input type="email" placeholder="opcional" value={f.email} onChange={(e) => set("email", e.target.value)} /></label>
       <div className="row">
         <label>Data de nascimento<input type="date" value={f.birthDate} onChange={(e) => set("birthDate", e.target.value)} /></label>
         <label>Integração no Grill<input type="date" value={f.joinDate} onChange={(e) => set("joinDate", e.target.value)} /></label>
@@ -699,7 +702,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
       </label>
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
-        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...f, name: f.name.trim(), roleId: f.roleId || null })}>Guardar membro</button>
+        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null })}>Guardar membro</button>
       </div>
     </Modal>
   );
