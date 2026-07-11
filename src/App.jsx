@@ -1247,12 +1247,13 @@ function ImportEventsModal({ members, onImport, onClose }) {
         const linha = i + 2;
         if (!name) { errors.push(`Linha ${linha}: falta o nome do evento.`); return; }
         if (!dateStart) { errors.push(`Linha ${linha} (${name}): data de início inválida ou em falta.`); return; }
-        if (!memberNames.length) { errors.push(`Linha ${linha} (${name}): pelo menos 1 membro.`); return; }
-        memberNames.forEach((nm) => { if (!known.has(norm(nm)) && !newNames.has(norm(nm))) newNames.set(norm(nm), nm); });
         let status = String(get("estado") || "").trim();
         if (!["Por planear", "Agendado", "Concluído"].includes(status)) {
           status = (dateEnd || dateStart) < todayISO() ? "Concluído" : "Por planear";
         }
+        const concluded = status === "Concluído" || (dateEnd || dateStart) < todayISO();
+        if (concluded && !memberNames.length) { errors.push(`Linha ${linha} (${name}): evento concluído precisa de pelo menos 1 membro.`); return; }
+        memberNames.forEach((nm) => { if (!known.has(norm(nm)) && !newNames.has(norm(nm))) newNames.set(norm(nm), nm); });
         events.push({
           name, dateStart, dateEnd,
           location: String(get("local", "localizacao", "localização") || "").trim(),
