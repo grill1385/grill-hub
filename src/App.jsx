@@ -339,7 +339,7 @@ export default function App() {
         </nav>
 
         {/* ---------- Conteúdo ---------- */}
-        <main className="content">
+        <main className={`content ${tab === "home" ? "wide" : ""}`}>
           {tab === "home" && (
             <HomeTab events={sortedEventsAsc} scoreboard={scoreboard} myMember={myMember}
               onOpenEvent={(id) => setModal({ type: "eventDetail", id })}
@@ -528,91 +528,118 @@ export default function App() {
    ============================================================ */
 
 function HomeTab({ events, scoreboard, myMember, onOpenEvent, onMember, onConfirm, onGoScoreboard }) {
-  const VISIBLE = 3;
-  const firstUpcoming = useMemo(() => {
-    const t = todayISO();
-    const i = events.findIndex((e) => eventEndDate(e) >= t);
-    const max = Math.max(0, events.length - VISIBLE);
-    return i === -1 ? max : Math.min(i, max);
+  const anchor = useMemo(() => {
+    let a = -1;
+    events.forEach((e, i) => { if (getStatus(e) === "Concluído") a = i; });
+    return a;
   }, [events]);
-  const [start, setStart] = useState(firstUpcoming);
-  const maxStart = Math.max(0, events.length - VISIBLE);
-  const s = Math.min(Math.max(0, start), maxStart);
-  const visible = events.slice(s, s + VISIBLE);
+  const [offset, setOffset] = useState(0); // 0 = presente
+  const [dir, setDir] = useState(0);
+  const maxOffset = Math.max(0, anchor);
+  const k = Math.min(Math.max(0, offset), maxOffset);
+  const idxLeft = anchor - k;
+  const leftEv = idxLeft >= 0 ? events[idxLeft] : null;
+  const centerEvs = events.slice(idxLeft + 1, idxLeft + 4);
+  const rightEv = k > 0 ? events[idxLeft + 4] || null : null;
   const todo = myMember
     ? events.filter((e) => getStatus(e) !== "Concluído" && !e.confirmations?.[myMember.id])
     : [];
-  const top3 = scoreboard.slice(0, 3);
+  const top5 = scoreboard.slice(0, 5);
+
+  function move(d) {
+    const nk = Math.min(Math.max(0, k + d), maxOffset);
+    if (nk !== k) { setDir(d); setOffset(nk); }
+  }
+
+  const card = (ev, fade = 0, big = false) => {
+    const st = getStatus(ev); const sty = STATUS_STYLE[st];
+    return (
+      <div key={ev.id} className={`tl-card fade-${fade} ${big ? "big" : ""}`} onClick={() => onOpenEvent(ev.id)}>
+        <div className="tl-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+        <strong>{ev.name}</strong>
+        <div className="tl-meta">
+          <span className="status" style={{ background: sty.bg, color: sty.fg }}><i style={{ background: sty.dot }} />{st}</span>
+          {ev.location && <span className="loc">{Icon.pin({})} {ev.location}</span>}
+        </div>
+        <div className="tl-foot">
+          {st === "Concluído" ? (
+            <span className="hint">{Object.values(ev.presences || {}).filter(Boolean).length} presenças</span>
+          ) : (
+            <>
+              <span className="hint">{Object.values(ev.confirmations || {}).filter(Boolean).length} confirmados</span>
+              {myMember && (
+                <button className={`pill ${ev.confirmations?.[myMember.id] ? "on" : ""}`}
+                  onClick={(e) => { e.stopPropagation(); onConfirm(ev); }}>
+                  {ev.confirmations?.[myMember.id] ? "✓ Vou!" : "Confirmar"}
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <section>
-      <div className="home-grid">
-        <div className="home-main">
-          <div className="section-head"><h2>Eventos</h2></div>
-          {events.length === 0 ? (
-            <p className="empty">Ainda não há eventos.</p>
-          ) : (
-            <div className="carousel">
-              <button className="arrow" disabled={s === 0} onClick={() => setStart(s - 1)} title="Eventos anteriores">‹</button>
-              <div className="carousel-track">
-                {visible.map((ev) => (
-                  <div key={ev.id} className="carousel-item">
-                    <div className="skewer-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
-                    <EventCard ev={ev} compact onOpen={() => onOpenEvent(ev.id)} onEdit={() => {}} />
-                    {myMember && getStatus(ev) !== "Concluído" && (
-                      <button className={`pill ${ev.confirmations?.[myMember.id] ? "on" : ""}`} onClick={() => onConfirm(ev)}>
-                        {ev.confirmations?.[myMember.id] ? "✓ Vou!" : "Confirmar presença"}
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-              <button className="arrow" disabled={s >= maxStart} onClick={() => setStart(s + 1)} title="Eventos seguintes">›</button>
-            </div>
-          )}
-
-          <div className="section-head" style={{ marginTop: 30 }}><h2>Scoreboard — Top 3</h2></div>
-          {top3.length === 0 && <p className="empty">Sem membros ainda.</p>}
-          <div className="board">
-            {top3.map((row, i) => (
-              <button key={row.member.id} className="board-row" onClick={() => onMember(row.member.id)}>
-                <span className={`rank r${i + 1}`}>{i + 1}</span>
-                <span className="board-name">
-                  {row.member.name}
-                  {row.member.username && <span className="uname">@{row.member.username}</span>}
-                </span>
-                <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
-                <span className="board-pct">{row.pct}%</span>
-                <span className="board-count">{row.present}/{row.total}</span>
-              </button>
-            ))}
-          </div>
-          {scoreboard.length > 3 && (
-            <div className="mini-list" style={{ marginTop: 10 }}>
-              {scoreboard.slice(3).map((row, i) => (
-                <button key={row.member.id} className="mini-item" onClick={() => onMember(row.member.id)}>
-                  <span>{i + 4}. {row.member.name}</span><span className="mini-date">{row.pct}%</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <div className="actions" style={{ justifyContent: "center" }}>
-            <button className="btn ember" onClick={onGoScoreboard}>Ver scoreboard completo</button>
+    <section className="home2">
+      <div className="tl-labels">
+        <h4>{k === 0 ? "Último evento concluído" : `Linha temporal · ${k} para trás`}</h4>
+        <h4>{k === 0 ? "Próximos eventos" : ""}</h4>
+        <h4>{k === 0 ? "Por confirmar" : ""}</h4>
+      </div>
+      <div className={`tl-row ${dir > 0 ? "slide-past" : dir < 0 ? "slide-future" : ""}`} key={`k${k}`}>
+        <div className="tl-slot tl-left">
+          {leftEv ? card(leftEv, 0, true) : <div className="tl-card empty-card"><p className="hint">Ainda sem eventos concluídos.</p></div>}
+          <div className="tl-arrows">
+            <button className="arrow" disabled={k >= maxOffset} onClick={() => move(1)} title="Recuar no tempo">‹</button>
+            <button className="arrow" disabled={k <= 0} onClick={() => move(-1)} title="Avançar no tempo">›</button>
           </div>
         </div>
-
-        <aside className="todo-panel">
-          <h4 style={{ marginTop: 0 }}>Futuros eventos</h4>
-          {!myMember && <p className="hint">Entra com a tua conta de membro para confirmares presenças.</p>}
-          {myMember && todo.length === 0 && <p className="hint">Tudo confirmado — brasa à vista!</p>}
-          {myMember && todo.map((ev) => (
-            <div key={ev.id} className="todo-item">
-              <button className="todo-name" onClick={() => onOpenEvent(ev.id)}>{ev.name}</button>
-              <span className="mini-date">{fmtDate(ev.dateStart)}</span>
-              <button className="pill" onClick={() => onConfirm(ev)}>Confirmar presença</button>
+        <div className="tl-slot tl-center">
+          {centerEvs.length
+            ? centerEvs.map((ev, i) => card(ev, i))
+            : <div className="tl-card empty-card"><p className="hint">Sem próximos eventos.</p></div>}
+        </div>
+        <div className="tl-slot tl-right">
+          {k === 0 ? (
+            <div className="todo-panel2">
+              <h4 style={{ marginTop: 0 }}>Futuros eventos</h4>
+              {!myMember && <p className="hint">Entra com a tua conta de membro para confirmares presenças.</p>}
+              {myMember && todo.length === 0 && <p className="hint">Tudo confirmado — brasa à vista!</p>}
+              {myMember && todo.map((ev) => (
+                <div key={ev.id} className="todo-item">
+                  <button className="todo-name" onClick={() => onOpenEvent(ev.id)}>{ev.name}</button>
+                  <span className="mini-date">{fmtDate(ev.dateStart)}</span>
+                  <button className="pill" onClick={() => onConfirm(ev)}>Confirmar presença</button>
+                </div>
+              ))}
             </div>
-          ))}
-        </aside>
+          ) : (
+            rightEv ? card(rightEv, 2) : <div className="tl-card empty-card" />
+          )}
+        </div>
+      </div>
+
+      <div className="section-head" style={{ marginTop: 36 }}><h2>Scoreboard — Top 5</h2></div>
+      {top5.length === 0 && <p className="empty">Sem membros ainda.</p>}
+      <div className="podium">
+        {top5.map((row, i) => (
+          <button key={row.member.id} className="podium-card" onClick={() => onMember(row.member.id)}>
+            <span className={`rank r${i + 1}`}>{i + 1}</span>
+            {row.member.avatarUrl
+              ? <img className="avatar avatar-img" src={row.member.avatarUrl} alt="" />
+              : <div className="avatar">{row.member.name.slice(0, 1).toUpperCase()}</div>}
+            <span className="board-name">
+              {row.member.name}
+              {row.member.username && <span className="uname">@{row.member.username}</span>}
+            </span>
+            <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
+            <span className="podium-pct">{row.pct}% <span className="mini-date">({row.present}/{row.total})</span></span>
+          </button>
+        ))}
+      </div>
+      <div className="actions" style={{ justifyContent: "center", marginTop: 18 }}>
+        <button className="btn ember" onClick={onGoScoreboard}>Ver scoreboard completo</button>
       </div>
     </section>
   );
@@ -1228,6 +1255,46 @@ function Style() {
       .arrow:hover:not(:disabled) { color:var(--ember); border-color:var(--ember); }
       .arrow:disabled { opacity:.3; cursor:default; }
 
+      /* Home 2.0 */
+      .content.wide { max-width:none; }
+      .home2 { width:100%; }
+      .tl-labels, .tl-row { display:grid; grid-template-columns:1.15fr 3fr 1.15fr; gap:14px; }
+      .tl-labels h4 { margin:0 0 10px; }
+      .tl-center { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
+      .tl-slot { min-width:0; }
+      .tl-left { position:relative; display:flex; flex-direction:column; }
+      .tl-card { background:linear-gradient(105deg, var(--surface) 20%, rgba(33,28,23,.45) 100%); border:1px solid var(--line);
+        border-radius:14px; padding:16px; cursor:pointer; display:flex; flex-direction:column; gap:8px; min-height:150px;
+        transition:border-color .18s, transform .18s, box-shadow .18s; }
+      .tl-card:hover { border-color:var(--ember); transform:translateY(-3px); box-shadow:0 10px 26px rgba(0,0,0,.35); }
+      .tl-card.big { background:var(--surface); height:100%; }
+      .tl-card.empty-card { cursor:default; align-items:center; justify-content:center; }
+      .tl-card.empty-card:hover { border-color:var(--line); transform:none; box-shadow:none; }
+      .fade-0 { opacity:1; } .fade-1 { opacity:.85; } .fade-2 { opacity:.68; }
+      .fade-1:hover, .fade-2:hover { opacity:1; }
+      .tl-date { font-family:'Bebas Neue','Arial Narrow',sans-serif; letter-spacing:.06em; color:var(--gold); font-size:15px; }
+      .tl-meta { display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:12.5px; color:var(--muted); }
+      .tl-foot { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-top:auto; flex-wrap:wrap; }
+      .tl-arrows { position:absolute; bottom:12px; left:0; right:0; display:flex; justify-content:center; gap:10px;
+        opacity:0; transition:opacity .2s; pointer-events:none; }
+      .tl-left:hover .tl-arrows { opacity:1; pointer-events:auto; }
+      .tl-arrows .arrow { width:40px; height:34px; backdrop-filter:blur(4px); background:rgba(42,36,30,.85); }
+      @keyframes slidePast { from { transform:translateX(-36px); opacity:.2; } to { transform:translateX(0); opacity:1; } }
+      @keyframes slideFuture { from { transform:translateX(36px); opacity:.2; } to { transform:translateX(0); opacity:1; } }
+      .tl-row.slide-past { animation:slidePast .32s ease; }
+      .tl-row.slide-future { animation:slideFuture .32s ease; }
+      .todo-panel2 { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px; height:100%;
+        box-shadow:0 10px 28px rgba(0,0,0,.3); }
+      .podium { display:grid; grid-template-columns:repeat(5, 1fr); gap:14px; }
+      .podium-card { display:flex; flex-direction:column; align-items:center; gap:9px; background:var(--surface);
+        border:1px solid var(--line); border-radius:14px; padding:18px 14px; cursor:pointer; font:inherit; color:var(--text);
+        transition:border-color .18s, transform .18s; }
+      .podium-card:hover { border-color:var(--ember); transform:translateY(-3px); }
+      .podium-card .board-name { text-align:center; }
+      .podium-card .board-bar { width:100%; height:8px; background:var(--surface2); border-radius:6px; overflow:hidden; }
+      .podium-pct { font-weight:700; color:var(--ember); font-size:14px; }
+      .podium-card .rank { font-size:24px; }
+
       @media (max-width: 760px) {
         .layout { flex-direction:column; }
         .sidebar { width:auto; flex-direction:row; overflow-x:auto; border-right:none; border-bottom:1px solid var(--line); padding:10px 12px; }
@@ -1245,6 +1312,11 @@ function Style() {
         .detail-grid { grid-template-columns:1fr; }
         .home-grid { flex-direction:column; }
         .todo-panel { width:auto; position:static; }
+        .tl-labels { display:none; }
+        .tl-row { grid-template-columns:1fr; }
+        .tl-center { grid-template-columns:1fr; }
+        .tl-arrows { opacity:1; pointer-events:auto; position:static; margin-top:8px; }
+        .podium { grid-template-columns:1fr 1fr; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
     `}</style>
