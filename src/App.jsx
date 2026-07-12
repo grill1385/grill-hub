@@ -86,6 +86,11 @@ export default function App() {
   const [session, setSession] = useState(null);
   const [tab, setTab] = useState("home");
   const [eventView, setEventView] = useState("timeline"); // 'lista' | 'timeline'
+  const [eventSort, setEventSort] = useState("desc"); // 'desc' = recentes primeiro
+  const [filterYear, setFilterYear] = useState("");
+  const [filterMembers, setFilterMembers] = useState([]);
+  const [showMemberFilter, setShowMemberFilter] = useState(false);
+
   const [modal, setModal] = useState(null); // {type, ...payload}
   const [toast, setToast] = useState(null);
 
@@ -153,6 +158,18 @@ export default function App() {
     () => (data ? [...data.events].sort((a, b) => (a.dateStart || "").localeCompare(b.dateStart || "")) : []),
     [data]
   );
+
+  const eventYears = useMemo(
+    () => [...new Set(sortedEventsAsc.map((e) => (e.dateStart || "").slice(0, 4)).filter(Boolean))].sort(),
+    [sortedEventsAsc]
+  );
+
+  const visibleEvents = useMemo(() => {
+    let list = sortedEventsAsc;
+    if (filterYear) list = list.filter((e) => (e.dateStart || "").startsWith(filterYear));
+    if (filterMembers.length) list = list.filter((e) => filterMembers.every((id) => e.presences?.[id]));
+    return eventSort === "desc" ? [...list].reverse() : list;
+  }, [sortedEventsAsc, filterYear, filterMembers, eventSort]);
 
   const hierarchyTiers = useMemo(() => {
     if (!data?.roles.length) return [];
@@ -455,13 +472,47 @@ export default function App() {
                 </div>
               </div>
 
+              <div className="filter-bar">
+                <div className="segmented">
+                  <button className={eventSort === "desc" ? "on" : ""} onClick={() => setEventSort("desc")}>Recentes primeiro</button>
+                  <button className={eventSort === "asc" ? "on" : ""} onClick={() => setEventSort("asc")}>Antigos primeiro</button>
+                </div>
+                <select value={filterYear} onChange={(e) => setFilterYear(e.target.value)}>
+                  <option value="">Todos os anos</option>
+                  {eventYears.map((y) => <option key={y} value={y}>{y}</option>)}
+                </select>
+                <button className={`btn ghost small ${filterMembers.length ? "active-filter" : ""}`} onClick={() => setShowMemberFilter(!showMemberFilter)}>
+                  Filtrar por membros{filterMembers.length ? ` (${filterMembers.length})` : ""}
+                </button>
+                {(filterYear || filterMembers.length > 0) && (
+                  <button className="btn ghost small" onClick={() => { setFilterYear(""); setFilterMembers([]); }}>Limpar filtros</button>
+                )}
+                {(filterYear || filterMembers.length > 0) && (
+                  <span className="hint" style={{ margin: 0 }}>{visibleEvents.length} evento(s)</span>
+                )}
+              </div>
+              {showMemberFilter && (
+                <div className="pill-row" style={{ marginBottom: 16 }}>
+                  {data.members.map((m) => (
+                    <button key={m.id} className={`pill ${filterMembers.includes(m.id) ? "on" : ""}`}
+                      onClick={() => setFilterMembers(filterMembers.includes(m.id) ? filterMembers.filter((x) => x !== m.id) : [...filterMembers, m.id])}>
+                      {m.name}
+                    </button>
+                  ))}
+                  {filterMembers.length > 1 && <span className="hint" style={{ margin: 0 }}>Eventos em que todos os selecionados estiveram presentes.</span>}
+                </div>
+              )}
+
               {sortedEventsAsc.length === 0 && (
                 <p className="empty">Ainda não há eventos. {isAdmin ? "Adiciona o primeiro com o botão + Evento." : "O ADMIN ainda não acendeu a grelha."}</p>
+              )}
+              {sortedEventsAsc.length > 0 && visibleEvents.length === 0 && (
+                <p className="empty">Nenhum evento corresponde aos filtros.</p>
               )}
 
               {eventView === "lista" ? (
                 <div className="cards">
-                  {[...sortedEventsAsc].reverse().map((ev) => (
+                  {visibleEvents.map((ev) => (
                     <EventCard key={ev.id} ev={ev} isAdmin={isAdmin}
                       onOpen={() => setModal({ type: "eventDetail", id: ev.id })}
                       onEdit={() => setModal({ type: "eventForm", id: ev.id })} />
@@ -469,7 +520,7 @@ export default function App() {
                 </div>
               ) : (
                 <div className="skewer">
-                  {sortedEventsAsc.map((ev, i) => (
+                  {visibleEvents.map((ev, i) => (
                     <div key={ev.id} className={`skewer-item ${i % 2 ? "right" : "left"}`}>
                       <span className="skewer-dot" style={{ background: STATUS_STYLE[getStatus(ev)].dot }} />
                       <div className="skewer-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
@@ -1774,6 +1825,9 @@ function Style() {
       .receipts img { width:64px; height:64px; object-fit:cover; border-radius:8px; border:1px solid var(--line); }
       .receipts a:hover img { border-color:var(--ember); }
       input[type="file"] { padding:7px; }
+      .filter-bar { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+      .filter-bar select { padding:7px 10px; }
+      .btn.ghost.active-filter { border-color:var(--ember); color:var(--ember); }
       .shares-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px 12px; margin-top:10px; }
       .debt-line { font-size:12.5px; color:var(--muted); }
       .debt-line b { color:var(--ember); }
