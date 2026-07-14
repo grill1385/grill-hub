@@ -59,8 +59,11 @@ Deno.serve(async (req) => {
             </div>`,
         }),
       });
-      if (r.ok) sent++;
+      if (r.ok) { sent++; } else {
+        console.error(`Brevo falhou para ${m.email}: ${r.status} ${await r.text()}`);
+      }
     }
+    console.log(`notify-event: ${sent}/${dest.length} enviados para o evento ${ev.name}`);
     return new Response(JSON.stringify({ sent, total: dest.length }), {
       headers: { ...cors, "Content-Type": "application/json" },
     });
