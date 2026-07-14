@@ -129,6 +129,15 @@ export default function App() {
     api.loadAll().then(setData).catch(() => {});
   }, [session?.user?.id]);
 
+  useEffect(() => {
+    if (loading || !data) return;
+    const id = new URLSearchParams(window.location.search).get("event");
+    if (id && data.events.some((e) => e.id === id)) {
+      setModal({ type: "eventDetail", id });
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+  }, [loading]);
+
   function showToast(msg) {
     setToast(msg);
     setTimeout(() => setToast(null), 2600);
@@ -278,6 +287,18 @@ export default function App() {
       setData({ ...data, admins: data.admins.filter((a) => a.email !== email) });
       showToast("Admin removido.");
     } catch { showToast("Não foi possível remover."); }
+  }
+
+  function shareEvent(ev) {
+    const url = `https://noperkfdcdairrpnomrs.supabase.co/functions/v1/event-og?id=${encodeURIComponent(ev.id)}`;
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url).then(
+        () => showToast("Link copiado — cola no Discord!"),
+        () => window.prompt("Copia o link:", url)
+      );
+    } else {
+      window.prompt("Copia o link:", url);
+    }
   }
 
   async function notifyEventMembers(ev) {
@@ -650,6 +671,7 @@ export default function App() {
           onMember={(id) => setModal({ type: "memberDetail", id })}
           onConfirm={() => toggleConfirmation(ev)}
           onNotify={() => notifyEventMembers(ev)}
+          onShare={() => shareEvent(ev)}
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
           onToggleSettled={toggleSettled}
@@ -1016,7 +1038,7 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
   const owing = {};
   (purchases || []).forEach((pu) => {
     (pu.participants || []).forEach((mid) => {
@@ -1041,6 +1063,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
       <div className="detail-row">
         <span className="status" style={{ background: s.bg, color: s.fg }}><i style={{ background: s.dot }} />{st}</span>
         <span>{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</span>
+        <button className="btn ghost small" onClick={onShare} title="Copiar link de partilha (com pré-visualização no Discord)">Partilhar</button>
         {isAdmin && <button className="btn ghost small" onClick={onEdit}>{Icon.gear({})} Editar</button>}
       </div>
       {ev.description && <p className="desc">{ev.description}</p>}
