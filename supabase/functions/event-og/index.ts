@@ -4,7 +4,7 @@
 
 const SITE = "https://grill1385.github.io/grill-hub/";
 
-const esc = (t: unknown) =>
+const esc = (t) =>
   String(t ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 Deno.serve(async (req) => {
@@ -13,7 +13,7 @@ Deno.serve(async (req) => {
   const SB = Deno.env.get("SUPABASE_URL")!;
   const KEY = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-  let ev: Record<string, unknown> | null = null;
+  let ev = null;
   if (id) {
     const r = await fetch(`${SB}/rest/v1/events?id=eq.${encodeURIComponent(id)}&select=*`, {
       headers: { apikey: KEY, Authorization: `Bearer ${KEY}` },
@@ -22,14 +22,14 @@ Deno.serve(async (req) => {
   }
 
   const target = ev ? `${SITE}?event=${encodeURIComponent(id)}` : SITE;
-  const fmt = (iso?: string) => (iso ? iso.split("-").reverse().join("/") : "");
+  const fmt = (iso) => (iso ? iso.split("-").reverse().join("/") : "");
   const hoje = new Date().toISOString().slice(0, 10);
   const concluido = ev && (ev.status === "Concluído" || String(ev.date_end ?? ev.date_start) < hoje);
-  const conf = ev ? Object.values((ev.confirmations as Record<string, boolean>) ?? {}).filter(Boolean).length : 0;
-  const pres = ev ? Object.values((ev.presences as Record<string, boolean>) ?? {}).filter(Boolean).length : 0;
+  const conf = ev ? Object.values(ev.confirmations ?? {}).filter(Boolean).length : 0;
+  const pres = ev ? Object.values(ev.presences ?? {}).filter(Boolean).length : 0;
 
   const title = ev
-    ? `🔥 ${ev.name} — ${fmt(ev.date_start as string)}${ev.date_end ? " até " + fmt(ev.date_end as string) : ""}`
+    ? `🔥 ${ev.name} — ${fmt(ev.date_start)}${ev.date_end ? " até " + fmt(ev.date_end) : ""}`
     : "GrillHub";
   const counts = ev ? (concluido ? `${pres} presenças` : `${conf} confirmado(s) — entra e confirma a tua presença!`) : "";
   const descr = ev
@@ -52,7 +52,8 @@ Deno.serve(async (req) => {
 <script>location.replace(${JSON.stringify(target)});</script>
 </head><body>A redirecionar para o GrillHub…</body></html>`;
 
-  return new Response(html, {
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=300" },
-  });
+  const headers = new Headers();
+  headers.set("Content-Type", "text/html; charset=utf-8");
+  headers.set("Cache-Control", "public, max-age=300");
+  return new Response(html, { status: 200, headers });
 });
