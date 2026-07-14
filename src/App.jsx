@@ -280,6 +280,17 @@ export default function App() {
     } catch { showToast("Não foi possível remover."); }
   }
 
+  async function notifyEventMembers(ev) {
+    showToast("A enviar avisos…");
+    try {
+      const { data: res, error } = await supabase.functions.invoke("notify-event", { body: { eventId: ev.id } });
+      if (error || res?.error) throw error || new Error(res.error);
+      showToast(`Aviso enviado a ${res.sent} de ${res.total} membro(s) com email.`);
+    } catch {
+      showToast("Não foi possível enviar — a função notify-event está configurada no Supabase?");
+    }
+  }
+
   async function toggleConfirmation(ev) {
     if (!myMember) return;
     const next = !ev.confirmations?.[myMember.id];
@@ -638,6 +649,7 @@ export default function App() {
           onEdit={() => setModal({ type: "eventForm", id: ev.id })}
           onMember={(id) => setModal({ type: "memberDetail", id })}
           onConfirm={() => toggleConfirmation(ev)}
+          onNotify={() => notifyEventMembers(ev)}
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
           onToggleSettled={toggleSettled}
@@ -1004,7 +1016,7 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
   const owing = {};
   (purchases || []).forEach((pu) => {
     (pu.participants || []).forEach((mid) => {
@@ -1062,13 +1074,18 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
               <button key={m.id} className="pill on" onClick={() => onMember(m.id)}>{m.name}</button>
             )) : <span className="hint">Ainda ninguém confirmou.</span>}
           </div>
-          {myMember && (
-            <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <div className="actions" style={{ justifyContent: "flex-start" }}>
+            {myMember && (
               <button className={`btn ${ev.confirmations?.[myMember.id] ? "ghost" : "ember"}`} onClick={onConfirm}>
                 {ev.confirmations?.[myMember.id] ? "Cancelar confirmação" : "Confirmar presença"}
               </button>
-            </div>
-          )}
+            )}
+            {isAdmin && (
+              <button className="btn ghost" title="Envia email a todos os membros com email a pedir confirmação" onClick={onNotify}>
+                Avisar membros por email
+              </button>
+            )}
+          </div>
         </>
       )}
 
