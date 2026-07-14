@@ -5,7 +5,7 @@
 const SB = "https://noperkfdcdairrpnomrs.supabase.co";
 const SB_KEY = "sb_publishable_9IyQdSmI1GviEx83KqtCvw_gxMd-cnl";
 const BREVO_KEY = process.env.BREVO_API_KEY;
-const SENDER_EMAIL = process.env.SENDER_EMAIL || "filipesalazar95@gmail.com";
+const SENDER_EMAIL = process.env.SENDER_EMAIL || "grillfeup@gmail.com";
 const SITE = "https://grill1385.github.io/grill-hub/";
 const DIAS_ANTES = 3;
 

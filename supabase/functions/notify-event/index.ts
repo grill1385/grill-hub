@@ -37,7 +37,7 @@ Deno.serve(async (req) => {
       ? `<p>📍 ${ev.location}${ev.location_url ? ` — <a href="${ev.location_url}">mapa</a>` : ""}</p>` : "";
     const SITE = "https://grill1385.github.io/grill-hub/";
     const BREVO = Deno.env.get("BREVO_API_KEY")!;
-    const SENDER = Deno.env.get("SENDER_EMAIL") ?? "filipesalazar95@gmail.com";
+    const SENDER = Deno.env.get("SENDER_EMAIL") ?? "grillfeup@gmail.com";
 
     let sent = 0;
     for (const m of dest) {
