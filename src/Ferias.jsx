@@ -27,6 +27,19 @@ function addMonthsISO(iso, delta) {
   return dt.toISOString().slice(0, 10);
 }
 
+function haversineKm(a, b) {
+  const R = 6371, rad = (x) => (x * Math.PI) / 180;
+  const dLat = rad(b[0] - a[0]), dLon = rad(b[1] - a[1]);
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(a[0])) * Math.cos(rad(b[0])) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function fmtDur(hours) {
+  if (hours == null || !isFinite(hours)) return "—";
+  const h = Math.floor(hours), m = Math.round((hours - h) * 60);
+  return h ? `${h}h${m ? ` ${String(m).padStart(2, "0")}min` : ""}` : `${m}min`;
+}
+
 function nightsBetween(a, b) {
   if (!a || !b) return null;
   const n = Math.round((new Date(b) - new Date(a)) / 86400000);
@@ -648,12 +661,13 @@ async function geocodeCity(city, country) {
   } catch { return null; }
 }
 
-function RouteMap({ places, stays }) {
+function RouteMap({ places, stays, transports }) {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const [pts, setPts] = useState(null); // [{ place, ll, fromStay }]
   const sig = places.map((p) => `${p.id}|${p.city}|${p.country || ""}`).join(";")
     + "#" + stays.map((st) => st.id + (st.links || []).join(",")).join(";");
+  const tSig = (transports || []).map((t) => t.id + t.status + (t.date || "") + (t.time || "") + (t.kind || "") + (t.generalId || "")).join(";");
 
   useEffect(() => {
     let alive = true;
@@ -715,22 +729,62 @@ function RouteMap({ places, stays }) {
       L.marker(g.ll, { icon }).addTo(map).bindPopup(html);
     });
 
-    /* trajeto de carro (OSRM público); fallback: linhas retas */
+    /* trajeto por trechos clicáveis (OSRM público, condução); fallback: linhas retas */
     (async () => {
       if (pts.length < 2) return;
-      let latlngs = pts.map((x) => x.ll);
-      try {
-        const coords = pts.map((x) => `${x.ll[1]},${x.ll[0]}`).join(";");
-        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
-        const j = await res.json();
-        if (j.routes?.[0]?.geometry?.coordinates) latlngs = j.routes[0].geometry.coordinates.map(([lo, la]) => [la, lo]);
-      } catch { /* usa linhas retas */ }
-      if (mapRef.current === map && map._loaded !== false)
-        L.polyline(latlngs, { color: "#FF7A3D", weight: 4, opacity: 0.85 }).addTo(map);
+      const segs = [];
+      for (let i = 0; i < pts.length - 1; i++) segs.push([pts[i], pts[i + 1]]);
+      const results = await Promise.all(segs.map(async ([a, b]) => {
+        try {
+          const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${a.ll[1]},${a.ll[0]};${b.ll[1]},${b.ll[0]}?overview=full&geometries=geojson`);
+          const j = await res.json();
+          const r = j.routes?.[0];
+          if (r?.geometry?.coordinates)
+            return { latlngs: r.geometry.coordinates.map(([lo, la]) => [la, lo]), km: r.distance / 1000, driveH: r.duration / 3600 };
+        } catch { /* fallback abaixo */ }
+        return { latlngs: [a.ll, b.ll], km: haversineKm(a.ll, b.ll), driveH: null };
+      }));
+      if (mapRef.current !== map) return;
+
+      const base = { color: "#FF7A3D", weight: 4, opacity: 0.85 };
+      const hi = { color: "#FFD166", weight: 6, opacity: 1 };
+      const visLines = [];
+      results.forEach((seg, i) => {
+        const [a, b] = segs[i];
+        const A = a.place, B = b.place;
+        const leg = (transports || []).find((t) => !t.isGeneral
+          && ((t.fromPlaceId === A.id && t.toPlaceId === B.id) || (t.fromPlaceId === B.id && t.toPlaceId === A.id)));
+        const gen = leg?.generalId ? (transports || []).find((t) => t.id === leg.generalId) : null;
+        const kind = gen?.kind || leg?.kind || null;
+        const kmStraight = haversineKm(a.ll, b.ll);
+
+        let estH = seg.driveH, modo = "de carro";
+        if (kind === "Avião") { estH = kmStraight / 750 + 0.75; modo = "de avião"; }
+        else if (kind === "Comboio") { estH = seg.km / 90; modo = "de comboio"; }
+        else if (kind === "Autocarro") { estH = seg.driveH != null ? seg.driveH * 1.25 : seg.km / 70; modo = "de autocarro"; }
+        else if (kind === "Barco") { estH = kmStraight / 35; modo = "de barco"; }
+        else if (estH == null) estH = seg.km / 80;
+
+        const html =
+          `<strong>${placeName(A)} → ${placeName(B)}</strong><br/>` +
+          (leg
+            ? `🚏 ${gen ? (gen.name || gen.kind) : (leg.kind || "Transporte")} — ${(gen || leg).status}${leg.time ? ` · ${leg.time}` : ""}<br/>`
+            : "<em>sem transporte definido</em><br/>") +
+          `Partida: ${fmtDate(leg?.date || A.departDate)} · Chegada: ${fmtDate(B.arriveDate || leg?.date)}<br/>` +
+          `Distância: ${Math.round(seg.km)} km${kind === "Avião" ? ` por estrada (~${Math.round(kmStraight)} km em voo)` : ""}<br/>` +
+          `Tempo estimado ${modo}: ~${fmtDur(estH)}`;
+
+        const vis = L.polyline(seg.latlngs, base).addTo(map);
+        /* linha invisível mais larga para facilitar o clique */
+        const hit = L.polyline(seg.latlngs, { color: "#000", opacity: 0.001, weight: 18 }).addTo(map).bindPopup(html);
+        hit.on("click", () => { visLines.forEach((l) => l.setStyle(base)); vis.setStyle(hi); vis.bringToFront(); });
+        hit.on("popupclose", () => vis.setStyle(base));
+        visLines.push(vis);
+      });
     })();
 
     return () => { map.remove(); if (mapRef.current === map) mapRef.current = null; };
-  }, [pts]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [pts, tSig]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!places.length) return null;
   if (pts && !pts.length) return <p className="hint">Não consegui localizar os locais no mapa (geocoding indisponível?).</p>;
@@ -753,7 +807,7 @@ function PlacesView({ canEdit, places, stays, transports, onAddPlace, onEditPlac
         {canEdit && <button className="btn ember" onClick={onAddPlace}>+ Local</button>}
       </div>
       {places.length === 0 && <p className="empty">Sem locais ainda. Adiciona a primeira cidade do roteiro.</p>}
-      <RouteMap places={places} stays={stays} />
+      <RouteMap places={places} stays={stays} transports={transports} />
       <div className="cards">
         {places.map((p, i) => {
           const n = nightsBetween(p.arriveDate, p.departDate);
