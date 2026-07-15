@@ -686,19 +686,33 @@ function RouteMap({ places, stays }) {
     }).addTo(map);
     map.fitBounds(L.latLngBounds(pts.map((x) => x.ll)), { padding: [40, 40], maxZoom: 11 });
 
-    pts.forEach((x, i) => {
+    const popupHtml = (x, i) => {
       const p = x.place;
       const n = nightsBetween(p.arriveDate, p.departDate);
       const pStays = stays.filter((st) => st.placeId === p.id);
-      const html =
+      return (
         `<strong>${i + 1}. ${placeName(p)}</strong><br/>` +
         `${fmtDate(p.arriveDate)} → ${fmtDate(p.departDate)}${n != null ? ` · ${n} noite${n === 1 ? "" : "s"}` : ""}` +
         (pStays.length
           ? pStays.map((st) => `<br/>🏠 ${st.name || "Alojamento"} — ${st.status}`).join("")
           : "<br/><em>sem alojamento</em>") +
-        (x.fromStay ? "<br/><small>📍 morada do alojamento</small>" : "");
-      const icon = L.divIcon({ className: "", html: `<div class="vmap-pin">${i + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
-      L.marker(x.ll, { icon }).addTo(map).bindPopup(html);
+        (x.fromStay ? "<br/><small>📍 morada do alojamento</small>" : "")
+      );
+    };
+    /* pontos praticamente sobrepostos (ex.: viagem começa e acaba no mesmo sítio) partilham um pin "1·6" */
+    const groups = [];
+    const byKey = {};
+    pts.forEach((x, i) => {
+      const key = `${x.ll[0].toFixed(4)},${x.ll[1].toFixed(4)}`;
+      if (byKey[key]) byKey[key].items.push({ x, i });
+      else { byKey[key] = { ll: x.ll, items: [{ x, i }] }; groups.push(byKey[key]); }
+    });
+    groups.forEach((g) => {
+      const label = g.items.map(({ i }) => i + 1).join("·");
+      const html = g.items.map(({ x, i }) => popupHtml(x, i)).join('<hr style="margin:6px 0;opacity:.4"/>');
+      const w = Math.max(26, 12 + label.length * 8);
+      const icon = L.divIcon({ className: "", html: `<div class="vmap-pin" style="min-width:${w}px">${label}</div>`, iconSize: [w, 26], iconAnchor: [w / 2, 13] });
+      L.marker(g.ll, { icon }).addTo(map).bindPopup(html);
     });
 
     /* trajeto de carro (OSRM público); fallback: linhas retas */
@@ -1038,6 +1052,13 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
   const usesGeneral = !isGeneral && !!f.generalId;
 
+  /* com transporte geral, a data vem dos locais: saída do local de partida = chegada ao local de destino */
+  const fromPlace = places.find((p) => p.id === f.fromPlaceId) || null;
+  const toPlace = places.find((p) => p.id === f.toPlaceId) || null;
+  const derivedDate = fromPlace?.departDate || toPlace?.arriveDate || null;
+  const dateMismatch = usesGeneral && !!fromPlace?.departDate && !!toPlace?.arriveDate
+    && fromPlace.departDate !== toPlace.arriveDate;
+
   function submit() {
     if (isGeneral) {
       if (!f.name.trim()) { showToast("Dá um nome ao transporte geral (ex.: Carrinha alugada)."); return; }
@@ -1057,11 +1078,15 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
       const err = statusBlocker(f.status, f.links);
       if (err) { showToast(err); return; }
     }
+    if (dateMismatch) {
+      showToast(`A saída de ${placeName(fromPlace)} (${fmtDate(fromPlace.departDate)}) não coincide com a chegada a ${placeName(toPlace)} (${fmtDate(toPlace.arriveDate)}) — corrige as datas nos locais.`);
+      return;
+    }
     onSave({
       ...f, isGeneral: false, name: null, dateEnd: null,
       fromPlaceId: f.fromPlaceId || null, toPlaceId: f.toPlaceId || null,
       generalId: f.generalId || null,
-      date: f.date || null, time: f.time || null,
+      date: usesGeneral ? derivedDate : (f.date || null), time: f.time || null,
       pricePerson: usesGeneral ? null : (f.pricePerson === "" ? null : Number(f.pricePerson)),
     });
   }
@@ -1128,10 +1153,25 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
           <label>€/pessoa<input type="number" min="0" step="0.01" value={f.pricePerson} onChange={(e) => set("pricePerson", e.target.value)} /></label>
         </div>
       )}
-      <div className="row">
-        <label>Data<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
-        <label>Hora<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
-      </div>
+      {usesGeneral ? (
+        <>
+          {dateMismatch
+            ? <p className="hint" style={{ color: "#ff8a5c", margin: "0 0 8px" }}>
+                A saída de {placeName(fromPlace)} ({fmtDate(fromPlace.departDate)}) não coincide com a chegada a {placeName(toPlace)} ({fmtDate(toPlace.arriveDate)}) — corrige as datas nos locais.
+              </p>
+            : <p className="hint" style={{ margin: "0 0 8px" }}>
+                Data do deslocamento: {derivedDate ? fmtDate(derivedDate) : "—"} (vem das datas dos locais).
+              </p>}
+          <div className="row">
+            <label>Hora (opcional)<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
+          </div>
+        </>
+      ) : (
+        <div className="row">
+          <label>Data<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
+          <label>Hora<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
+        </div>
+      )}
       {!usesGeneral && (
         <>
           <LinksEditor links={f.links} onChange={(l) => set("links", l)} />
@@ -1206,7 +1246,7 @@ function FeriasStyle() {
       .vlink-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 2px 0; }
       .vlink-row a { flex: 1; word-break: break-all; }
       .vmap { height: 340px; border-radius: 12px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,.1); overflow: hidden; position: relative; z-index: 0; }
-      .vmap-pin { width: 26px; height: 26px; border-radius: 50%; background: #FF7A3D; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
+      .vmap-pin { min-width: 26px; padding: 0 5px; box-sizing: border-box; height: 26px; border-radius: 999px; background: #FF7A3D; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
       .vmap .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
     `}</style>
   );
