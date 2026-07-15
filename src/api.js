@@ -143,11 +143,13 @@ const toVTransport = (r) => ({
   date: r.date, time: r.time, kind: r.kind,
   pricePerson: r.price_person == null ? null : Number(r.price_person),
   links: r.links || [], status: r.status || "Por pesquisar",
+  isGeneral: !!r.is_general, name: r.name || null, dateEnd: r.date_end || null, generalId: r.general_id || null,
 });
 const fromVTransport = (t) => ({
   id: t.id, vacation_id: t.vacationId, from_place_id: t.fromPlaceId || null, to_place_id: t.toPlaceId || null,
   date: t.date || null, time: t.time || null, kind: t.kind || null,
   price_person: t.pricePerson ?? null, links: t.links || [], status: t.status || "Por pesquisar",
+  is_general: !!t.isGeneral, name: t.name || null, date_end: t.dateEnd || null, general_id: t.generalId || null,
 });
 const toVTask = (r) => ({
   id: r.id, vacationId: r.vacation_id, autoKey: r.auto_key, title: r.title,

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 
 /* ============================================================
    FÉRIAS DO GRILL
@@ -7,6 +7,8 @@ import React, { useEffect, useMemo, useState } from "react";
    Tabelas: ver supabase/setup-ferias.sql
    ============================================================ */
 import { feriasApi } from "./api.js";
+import L from "leaflet";
+import "leaflet/dist/leaflet.css";
 
 /* ---------- Utilitários (locais a esta aba) ---------- */
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
@@ -68,7 +70,7 @@ function computeAutoTasks(vac, places, stays, transports) {
   for (const p of places) {
     if (showL && !stays.some((s) => s.placeId === p.id))
       out.push({ autoKey: `stay-missing:${p.id}`, title: `Procurar alojamento em ${placeName(p)}`, dueDate: dueL });
-    if (showT && !transports.some((t) => t.toPlaceId === p.id || t.fromPlaceId === p.id))
+    if (showT && !transports.some((t) => !t.isGeneral && (t.toPlaceId === p.id || t.fromPlaceId === p.id)))
       out.push({ autoKey: `transport-missing:${p.id}`, title: `Procurar transporte para ${placeName(p)}`, dueDate: dueT });
   }
   for (const s of stays)
@@ -77,8 +79,14 @@ function computeAutoTasks(vac, places, stays, transports) {
       out.push({ autoKey: `stay-status:${s.id}`, title: `Alojamento "${s.name || placeName(p)}" está "${s.status}" — levar até "Pago"`, dueDate: dueL });
     }
   for (const t of transports)
-    if (showT && t.status !== "Pago")
-      out.push({ autoKey: `transport-status:${t.id}`, title: `Transporte ${transportLabel(t, places)} está "${t.status}" — levar até "Pago"`, dueDate: dueT });
+    if (showT && t.status !== "Pago" && !t.generalId)
+      out.push({
+        autoKey: `transport-status:${t.id}`,
+        title: t.isGeneral
+          ? `Transporte geral "${t.name || t.kind}" está "${t.status}" — levar até "Pago"`
+          : `Transporte ${transportLabel(t, places)} está "${t.status}" — levar até "Pago"`,
+        dueDate: dueT,
+      });
   return out;
 }
 
@@ -317,7 +325,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onEditPlace={(id) => setModal({ type: "placeForm", id })}
           onAddStay={(placeId) => setModal({ type: "stayForm", placeId })}
           onEditStay={(id) => setModal({ type: "stayForm", id })}
-          onAddTransport={() => setModal({ type: "transportForm" })}
+          onAddTransport={(general) => setModal({ type: "transportForm", general })}
           onEditTransport={(id) => setModal({ type: "transportForm", id })}
           onAddTask={() => setModal({ type: "taskForm" })}
           onEditTask={(id) => setModal({ type: "taskForm", id })}
@@ -357,13 +365,15 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
       )}
       {modal?.type === "transportForm" && vac && (
         <TransportFormModal transport={fd.transports.find((t) => t.id === modal.id)} vac={vac}
+          general={modal.general} transports={fd.transports.filter((t) => t.vacationId === vac.id)}
           places={fd.places.filter((p) => p.vacationId === vac.id)} showToast={showToast}
           onSave={(t) => save("transports", t, feriasApi.saveTransport, "Transporte")}
           onDelete={(id) => remove("transports", id, feriasApi.deleteTransport, "Transporte")}
           onClose={() => setModal(null)} />
       )}
       {modal?.type === "taskForm" && vac && (
-        <TaskFormModal task={fd.tasks.find((t) => t.id === modal.id)} vac={vac} members={members}
+        <TaskFormModal task={fd.tasks.find((t) => t.id === modal.id)} vac={vac}
+          members={members.filter((m) => vac.confirmations?.[m.id] || (fd.tasks.find((t) => t.id === modal.id)?.assignees || []).includes(m.id))}
           onSave={(t) => save("tasks", t, feriasApi.saveTask, "Tarefa")}
           onDelete={(id) => remove("tasks", id, feriasApi.deleteTask, "Tarefa")}
           onClose={() => setModal(null)} />
@@ -464,19 +474,26 @@ function VacationDetail(props) {
 
 /* ---------- Participação: membro confirma a sua, admin edita todas ---------- */
 function ParticipationSection({ vac, members, myMember, isAdmin, isPast, onToggleMine, onSetMember }) {
+  const [open, setOpen] = useState(false);
   const conf = vac.confirmations || {};
   const n = Object.values(conf).filter(Boolean).length;
   const mine = myMember ? !!conf[myMember.id] : false;
   return (
     <div style={{ marginBottom: 24 }}>
       <div className="section-head" style={{ marginBottom: 8 }}>
-        <h3 style={{ margin: 0 }}>Participação{n > 0 ? ` (${n})` : ""}</h3>
+        <h3 style={{ margin: 0 }}>
+          Participação{n > 0 ? ` (${n})` : ""}
+          <a href="#" className="vtask-jump" onClick={(e) => { e.preventDefault(); setOpen((o) => !o); }}>
+            {open ? "esconder" : "mostrar"}
+          </a>
+        </h3>
         {myMember && !isPast && (
           <button className={`btn small ${mine ? "ghost" : "ember"}`} onClick={onToggleMine}>
             {mine ? "Cancelar confirmação" : "Confirmar participação"}
           </button>
         )}
       </div>
+      {!open ? null : <>
       <div className="pill-row">
         {members.map((m) => {
           const on = !!conf[m.id];
@@ -498,8 +515,9 @@ function ParticipationSection({ vac, members, myMember, isAdmin, isPast, onToggl
       <p className="hint">
         {isPast
           ? "Férias já realizadas — só admins podem ajustar quem foi (para histórico)."
-          : "Confirma a tua participação — os custos por pessoa dividem-se pelos confirmados. Admins podem alterar qualquer confirmação."}
+          : "Confirma a tua participação — os custos por pessoa dividem-se pelos confirmados e as tarefas só se atribuem a participantes. Admins podem alterar qualquer confirmação."}
       </p>
+      </>}
     </div>
   );
 }
@@ -521,10 +539,11 @@ function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyC
   const nEvConfirm = linkedEvent ? Object.values(linkedEvent.confirmations || {}).filter(Boolean).length : 0;
   const nPeople = nVacConfirm || nEvConfirm || members.length;
   const stayTotal = stays.reduce((acc, s) => acc + (Number(s.priceTotal) || 0), 0);
-  const transpPP = transports.reduce((acc, t) => acc + (Number(t.pricePerson) || 0), 0);
+  const transpPP = transports.filter((t) => !t.generalId).reduce((acc, t) => acc + (Number(t.pricePerson) || 0), 0);
   const totalPP = stayTotal / (nPeople || 1) + transpPP;
 
   const isPast = (vac.dateEnd || vac.dateStart) < today;
+  const participants = members.filter((m) => vac.confirmations?.[m.id]);
 
   return (
     <div>
@@ -536,6 +555,7 @@ function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyC
         {canEdit && <button className="btn ghost small" onClick={onAddTask}>+ Tarefa manual</button>}
       </div>
       {isPast && <p className="hint">Férias já realizadas — sem tarefas automáticas.</p>}
+      {!isPast && participants.length === 0 && <p className="hint">Sem participantes confirmados — as tarefas só se atribuem a quem participa (secção Participação).</p>}
       {!isPast && open.length === 0 && <p className="empty">Nada pendente por agora. As tarefas automáticas aparecem 6 meses antes (transportes) e 4 meses antes (alojamento) do início.</p>}
       <div className="vtask-list">
         {open.map((t) => (
@@ -556,7 +576,9 @@ function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyC
                 </span>
               )}
             </div>
-            <AssigneePills assignees={t.assignees || []} members={members} canEdit={canEdit}
+            <AssigneePills assignees={t.assignees || []}
+              members={members.filter((m) => vac.confirmations?.[m.id] || (t.assignees || []).includes(m.id))}
+              canEdit={canEdit}
               onToggle={(mid) => onToggleAssignee(t, mid)} />
           </div>
         ))}
@@ -592,8 +614,118 @@ function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyC
   );
 }
 
+/* ---------- Mapa do roteiro ---------- */
+/* Coordenadas a partir de um link do Google Maps (quando o URL as contém). */
+function extractLatLngFromLink(url) {
+  if (!url) return null;
+  let m = url.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+  if (m) return [Number(m[1]), Number(m[2])];
+  m = url.match(/[?&](?:q|query|ll|center|destination)=(-?\d+\.\d+)(?:,|%2C)(-?\d+\.\d+)/i);
+  if (m) return [Number(m[1]), Number(m[2])];
+  m = url.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/);
+  if (m) return [Number(m[1]), Number(m[2])];
+  return null;
+}
+
+/* Geocoding da cidade via Nominatim (OpenStreetMap), com cache em localStorage. */
+async function geocodeCity(city, country) {
+  const key = `grill-geo:${`${city},${country || ""}`.toLowerCase()}`;
+  try { const c = localStorage.getItem(key); if (c) return JSON.parse(c); } catch { /* sem cache */ }
+  try {
+    const q = encodeURIComponent(country ? `${city}, ${country}` : city);
+    const res = await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${q}`);
+    const data = await res.json();
+    if (!data?.[0]) return null;
+    const pt = [Number(data[0].lat), Number(data[0].lon)];
+    try { localStorage.setItem(key, JSON.stringify(pt)); } catch { /* quota */ }
+    return pt;
+  } catch { return null; }
+}
+
+function RouteMap({ places, stays }) {
+  const boxRef = useRef(null);
+  const mapRef = useRef(null);
+  const [pts, setPts] = useState(null); // [{ place, ll, fromStay }]
+  const sig = places.map((p) => `${p.id}|${p.city}|${p.country || ""}`).join(";")
+    + "#" + stays.map((st) => st.id + (st.links || []).join(",")).join(";");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const out = [];
+      for (const p of places) {
+        let ll = null, fromStay = false;
+        for (const st of stays.filter((x) => x.placeId === p.id)) {
+          for (const l of st.links || []) {
+            const c = extractLatLngFromLink(l);
+            if (c) { ll = c; fromStay = true; break; }
+          }
+          if (ll) break;
+        }
+        if (!ll) ll = await geocodeCity(p.city, p.country);
+        if (ll) out.push({ place: p, ll, fromStay });
+      }
+      if (alive) setPts(out);
+    })();
+    return () => { alive = false; };
+  }, [sig]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!pts || !pts.length || !boxRef.current) return;
+    const map = L.map(boxRef.current, { scrollWheelZoom: false });
+    mapRef.current = map;
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      subdomains: "abcd", maxZoom: 19,
+    }).addTo(map);
+    map.fitBounds(L.latLngBounds(pts.map((x) => x.ll)), { padding: [40, 40], maxZoom: 11 });
+
+    pts.forEach((x, i) => {
+      const p = x.place;
+      const n = nightsBetween(p.arriveDate, p.departDate);
+      const pStays = stays.filter((st) => st.placeId === p.id);
+      const html =
+        `<strong>${i + 1}. ${placeName(p)}</strong><br/>` +
+        `${fmtDate(p.arriveDate)} → ${fmtDate(p.departDate)}${n != null ? ` · ${n} noite${n === 1 ? "" : "s"}` : ""}` +
+        (pStays.length
+          ? pStays.map((st) => `<br/>🏠 ${st.name || "Alojamento"} — ${st.status}`).join("")
+          : "<br/><em>sem alojamento</em>") +
+        (x.fromStay ? "<br/><small>📍 morada do alojamento</small>" : "");
+      const icon = L.divIcon({ className: "", html: `<div class="vmap-pin">${i + 1}</div>`, iconSize: [26, 26], iconAnchor: [13, 13] });
+      L.marker(x.ll, { icon }).addTo(map).bindPopup(html);
+    });
+
+    /* trajeto de carro (OSRM público); fallback: linhas retas */
+    (async () => {
+      if (pts.length < 2) return;
+      let latlngs = pts.map((x) => x.ll);
+      try {
+        const coords = pts.map((x) => `${x.ll[1]},${x.ll[0]}`).join(";");
+        const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`);
+        const j = await res.json();
+        if (j.routes?.[0]?.geometry?.coordinates) latlngs = j.routes[0].geometry.coordinates.map(([lo, la]) => [la, lo]);
+      } catch { /* usa linhas retas */ }
+      if (mapRef.current === map && map._loaded !== false)
+        L.polyline(latlngs, { color: "#FF7A3D", weight: 4, opacity: 0.85 }).addTo(map);
+    })();
+
+    return () => { map.remove(); if (mapRef.current === map) mapRef.current = null; };
+  }, [pts]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!places.length) return null;
+  if (pts && !pts.length) return <p className="hint">Não consegui localizar os locais no mapa (geocoding indisponível?).</p>;
+  return (
+    <>
+      <div className="vmap" ref={boxRef} />
+      {!pts && <p className="hint" style={{ marginTop: -8 }}>A localizar cidades no mapa…</p>}
+    </>
+  );
+}
+
 /* ---------- Locais ---------- */
 function PlacesView({ canEdit, places, stays, transports, onAddPlace, onEditPlace }) {
+  const gmap = {};
+  transports.forEach((t) => { if (t.isGeneral) gmap[t.id] = t; });
   return (
     <div>
       <div className="section-head" style={{ marginBottom: 8 }}>
@@ -601,6 +733,7 @@ function PlacesView({ canEdit, places, stays, transports, onAddPlace, onEditPlac
         {canEdit && <button className="btn ember" onClick={onAddPlace}>+ Local</button>}
       </div>
       {places.length === 0 && <p className="empty">Sem locais ainda. Adiciona a primeira cidade do roteiro.</p>}
+      <RouteMap places={places} stays={stays} />
       <div className="cards">
         {places.map((p, i) => {
           const n = nightsBetween(p.arriveDate, p.departDate);
@@ -617,8 +750,8 @@ function PlacesView({ canEdit, places, stays, transports, onAddPlace, onEditPlac
                 {fmtDate(p.arriveDate)} → {fmtDate(p.departDate)}{n != null ? ` · ${n} noite${n === 1 ? "" : "s"}` : ""}
               </div>
               <div className="vplace-info">
-                <div><span className="klabel">Chegada</span>{arr ? <>{arr.kind || "Transporte"} <StatusChip status={arr.status} /></> : <em className="vmiss">sem transporte</em>}</div>
-                <div><span className="klabel">Saída</span>{dep ? <>{dep.kind || "Transporte"} <StatusChip status={dep.status} /></> : <em className="vmiss">sem transporte</em>}</div>
+                <div><span className="klabel">Chegada</span>{arr ? <>{(arr.generalId && gmap[arr.generalId]?.name) || arr.kind || "Transporte"} <StatusChip status={arr.generalId ? (gmap[arr.generalId]?.status || arr.status) : arr.status} /></> : <em className="vmiss">sem transporte</em>}</div>
+                <div><span className="klabel">Saída</span>{dep ? <>{(dep.generalId && gmap[dep.generalId]?.name) || dep.kind || "Transporte"} <StatusChip status={dep.generalId ? (gmap[dep.generalId]?.status || dep.status) : dep.status} /></> : <em className="vmiss">sem transporte</em>}</div>
                 <div><span className="klabel">Alojamento</span>
                   {pStays.length
                     ? pStays.map((s) => <span key={s.id} style={{ marginRight: 6 }}><StatusChip status={s.status} /></span>)
@@ -673,31 +806,76 @@ function StaysView({ canEdit, places, stays, showToast, onAddStay, onEditStay, o
 
 /* ---------- Transportes ---------- */
 function TransportsView({ canEdit, places, transports, showToast, onAddTransport, onEditTransport, onTransportStatus }) {
+  const generals = transports.filter((t) => t.isGeneral);
+  const legs = transports.filter((t) => !t.isGeneral);
+  const gmap = {};
+  generals.forEach((g) => { gmap[g.id] = g; });
   return (
     <div>
       <div className="section-head" style={{ marginBottom: 8 }}>
         <h3 style={{ margin: 0 }}>Transportes</h3>
-        {canEdit && <button className="btn ember" onClick={onAddTransport}>+ Transporte</button>}
-      </div>
-      <p className="hint" style={{ marginTop: 0 }}>“Casinha” marca o início/fim das férias (casa).</p>
-      {transports.length === 0 && <p className="empty">Sem transportes ainda.</p>}
-      <div className="cards">
-        {transports.map((t) => (
-          <div key={t.id} className="card">
-            <div className="event-top">
-              <strong>{transportLabel(t, places)}</strong>
-              {canEdit && <button className="iconbtn" title="Editar" onClick={() => onEditTransport(t.id)}>✎</button>}
-            </div>
-            <div className="event-date">
-              {t.kind || "Transporte"} · {fmtDate(t.date)}{t.time ? ` ${t.time}` : ""}
-            </div>
-            <div className="event-meta" style={{ gap: 10 }}>
-              <StatusSelect item={t} canEdit={canEdit} showToast={showToast} onChange={(st) => onTransportStatus(t, st)} />
-              {t.pricePerson != null && t.pricePerson !== "" && <span className="vac-chip">{eur(t.pricePerson)}/pessoa</span>}
-            </div>
-            <LinksList links={t.links} />
+        {canEdit && (
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn ghost" onClick={() => onAddTransport(true)}>+ Transporte geral</button>
+            <button className="btn ember" onClick={() => onAddTransport(false)}>+ Transporte</button>
           </div>
-        ))}
+        )}
+      </div>
+      <p className="hint" style={{ marginTop: 0 }}>“Casinha” marca o início/fim das férias (casa). Um transporte geral (ex.: carrinha alugada) pode associar-se a vários deslocamentos.</p>
+
+      {generals.length > 0 && (
+        <>
+          <h4 style={{ margin: "8px 0" }}>Gerais</h4>
+          <div className="cards">
+            {generals.map((g) => {
+              const nLegs = legs.filter((l) => l.generalId === g.id).length;
+              return (
+                <div key={g.id} className="card">
+                  <div className="event-top">
+                    <strong>{g.name || "Transporte geral"}</strong>
+                    {canEdit && <button className="iconbtn" title="Editar" onClick={() => onEditTransport(g.id)}>✎</button>}
+                  </div>
+                  <div className="event-date">
+                    {g.kind || "Transporte"} · uso {fmtDate(g.date)} → {fmtDate(g.dateEnd)} · {nLegs} deslocamento{nLegs === 1 ? "" : "s"}
+                  </div>
+                  <div className="event-meta" style={{ gap: 10 }}>
+                    <StatusSelect item={g} canEdit={canEdit} showToast={showToast} onChange={(st) => onTransportStatus(g, st)} />
+                    {g.pricePerson != null && g.pricePerson !== "" && <span className="vac-chip">{eur(g.pricePerson)}/pessoa</span>}
+                  </div>
+                  <LinksList links={g.links} />
+                </div>
+              );
+            })}
+          </div>
+          <h4 style={{ margin: "16px 0 8px" }}>Deslocamentos</h4>
+        </>
+      )}
+
+      {legs.length === 0 && <p className="empty">Sem deslocamentos ainda.</p>}
+      <div className="cards">
+        {legs.map((t) => {
+          const gen = t.generalId ? gmap[t.generalId] : null;
+          return (
+            <div key={t.id} className="card">
+              <div className="event-top">
+                <strong>{transportLabel(t, places)}</strong>
+                {canEdit && <button className="iconbtn" title="Editar" onClick={() => onEditTransport(t.id)}>✎</button>}
+              </div>
+              <div className="event-date">
+                {gen ? (gen.name || "Transporte geral") : (t.kind || "Transporte")} · {fmtDate(t.date)}{t.time ? ` ${t.time}` : ""}
+              </div>
+              <div className="event-meta" style={{ gap: 10 }}>
+                {gen
+                  ? <><StatusChip status={gen.status} /><span className="vac-chip">geral: {gen.name || gen.kind}</span></>
+                  : <>
+                      <StatusSelect item={t} canEdit={canEdit} showToast={showToast} onChange={(st) => onTransportStatus(t, st)} />
+                      {t.pricePerson != null && t.pricePerson !== "" && <span className="vac-chip">{eur(t.pricePerson)}/pessoa</span>}
+                    </>}
+              </div>
+              <LinksList links={t.links} />
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -837,59 +1015,128 @@ function StayFormModal({ stay, vac, defaultPlaceId, places, showToast, onSave, o
   );
 }
 
-function TransportFormModal({ transport, vac, places, showToast, onSave, onDelete, onClose }) {
+function TransportFormModal({ transport, vac, general, places, transports, showToast, onSave, onDelete, onClose }) {
   const editing = !!transport;
+  const isGeneral = editing ? !!transport.isGeneral : !!general;
+  const generals = (transports || []).filter((t) => t.isGeneral && t.id !== transport?.id);
   const [f, setF] = useState(() => ({
     id: transport?.id || uid(), vacationId: vac.id,
     fromPlaceId: transport?.fromPlaceId || "", toPlaceId: transport?.toPlaceId || "",
-    kind: transport?.kind || "Avião",
-    date: transport?.date || "", time: transport?.time || "",
+    kind: transport?.kind || (isGeneral ? "Carro" : "Avião"),
+    name: transport?.name || "",
+    date: transport?.date || "", dateEnd: transport?.dateEnd || "", time: transport?.time || "",
     pricePerson: transport?.pricePerson ?? "",
     links: transport?.links || [], status: transport?.status || "Por pesquisar",
+    generalId: transport?.generalId || "",
   }));
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  const usesGeneral = !isGeneral && !!f.generalId;
+
   function submit() {
+    if (isGeneral) {
+      if (!f.name.trim()) { showToast("Dá um nome ao transporte geral (ex.: Carrinha alugada)."); return; }
+      if (f.date && f.dateEnd && f.dateEnd < f.date) { showToast("O fim do uso não pode ser antes do início."); return; }
+      const err = statusBlocker(f.status, f.links);
+      if (err) { showToast(err); return; }
+      onSave({
+        ...f, isGeneral: true, name: f.name.trim(), fromPlaceId: null, toPlaceId: null, generalId: null,
+        date: f.date || null, dateEnd: f.dateEnd || null, time: null,
+        pricePerson: f.pricePerson === "" ? null : Number(f.pricePerson),
+      });
+      return;
+    }
     if (!f.fromPlaceId && !f.toPlaceId) { showToast("Casinha → Casinha não é bem uma viagem 😄"); return; }
     if (f.fromPlaceId === f.toPlaceId) { showToast("Partida e chegada não podem ser o mesmo local."); return; }
-    const err = statusBlocker(f.status, f.links);
-    if (err) { showToast(err); return; }
+    if (!usesGeneral) {
+      const err = statusBlocker(f.status, f.links);
+      if (err) { showToast(err); return; }
+    }
     onSave({
-      ...f, fromPlaceId: f.fromPlaceId || null, toPlaceId: f.toPlaceId || null,
+      ...f, isGeneral: false, name: null, dateEnd: null,
+      fromPlaceId: f.fromPlaceId || null, toPlaceId: f.toPlaceId || null,
+      generalId: f.generalId || null,
       date: f.date || null, time: f.time || null,
-      pricePerson: f.pricePerson === "" ? null : Number(f.pricePerson),
+      pricePerson: usesGeneral ? null : (f.pricePerson === "" ? null : Number(f.pricePerson)),
     });
   }
+
   const endOptions = (
     <>
       <option value="">Casinha (início/fim)</option>
       {places.map((p) => <option key={p.id} value={p.id}>{placeName(p)}</option>)}
     </>
   );
+
+  if (isGeneral) {
+    return (
+      <VModal title={editing ? "Editar transporte geral" : "Novo transporte geral"} onClose={onClose} wide>
+        <label>Nome<input placeholder="ex.: Carrinha alugada" value={f.name} onChange={(e) => set("name", e.target.value)} autoFocus /></label>
+        <div className="row">
+          <label>Tipo
+            <select value={f.kind} onChange={(e) => set("kind", e.target.value)}>
+              {TRANSPORT_KINDS.map((k) => <option key={k}>{k}</option>)}
+            </select>
+          </label>
+          <label>€/pessoa<input type="number" min="0" step="0.01" value={f.pricePerson} onChange={(e) => set("pricePerson", e.target.value)} /></label>
+        </div>
+        <div className="row">
+          <label>Início do uso<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
+          <label>Fim do uso<input type="date" value={f.dateEnd} onChange={(e) => set("dateEnd", e.target.value)} /></label>
+        </div>
+        <LinksEditor links={f.links} onChange={(l) => set("links", l)} />
+        <label>Estado
+          <select value={f.status} onChange={(e) => set("status", e.target.value)}>
+            {VSTATUS.map((s) => <option key={s}>{s}</option>)}
+          </select>
+        </label>
+        <p className="hint">Depois associa este transporte aos deslocamentos entre locais (campo “Transporte geral” no formulário de cada deslocamento).</p>
+        <div className="actions">
+          {editing && <button className="btn danger" onClick={() => { if (window.confirm("Eliminar este transporte geral? Os deslocamentos associados ficam sem transporte.")) onDelete(f.id); }}>Eliminar</button>}
+          <button className="btn ember" onClick={submit}>Guardar transporte geral</button>
+        </div>
+      </VModal>
+    );
+  }
+
   return (
     <VModal title={editing ? "Editar transporte" : "Novo transporte"} onClose={onClose} wide>
       <div className="row">
         <label>Partida<select value={f.fromPlaceId} onChange={(e) => set("fromPlaceId", e.target.value)}>{endOptions}</select></label>
         <label>Chegada<select value={f.toPlaceId} onChange={(e) => set("toPlaceId", e.target.value)}>{endOptions}</select></label>
       </div>
-      <div className="row">
-        <label>Tipo
-          <select value={f.kind} onChange={(e) => set("kind", e.target.value)}>
-            {TRANSPORT_KINDS.map((k) => <option key={k}>{k}</option>)}
+      {generals.length > 0 && (
+        <label>Transporte geral (opcional — preço e estado ficam no geral)
+          <select value={f.generalId} onChange={(e) => set("generalId", e.target.value)}>
+            <option value="">— nenhum —</option>
+            {generals.map((g) => <option key={g.id} value={g.id}>{g.name || g.kind}</option>)}
           </select>
         </label>
-        <label>€/pessoa<input type="number" min="0" step="0.01" value={f.pricePerson} onChange={(e) => set("pricePerson", e.target.value)} /></label>
-      </div>
+      )}
+      {!usesGeneral && (
+        <div className="row">
+          <label>Tipo
+            <select value={f.kind} onChange={(e) => set("kind", e.target.value)}>
+              {TRANSPORT_KINDS.map((k) => <option key={k}>{k}</option>)}
+            </select>
+          </label>
+          <label>€/pessoa<input type="number" min="0" step="0.01" value={f.pricePerson} onChange={(e) => set("pricePerson", e.target.value)} /></label>
+        </div>
+      )}
       <div className="row">
         <label>Data<input type="date" value={f.date} onChange={(e) => set("date", e.target.value)} /></label>
         <label>Hora<input type="time" value={f.time} onChange={(e) => set("time", e.target.value)} /></label>
       </div>
-      <LinksEditor links={f.links} onChange={(l) => set("links", l)} />
-      <label>Estado
-        <select value={f.status} onChange={(e) => set("status", e.target.value)}>
-          {VSTATUS.map((s) => <option key={s}>{s}</option>)}
-        </select>
-      </label>
-      <p className="hint">“Em pesquisa” exige ≥1 link · “Escolhido” em diante exige exatamente 1 link.</p>
+      {!usesGeneral && (
+        <>
+          <LinksEditor links={f.links} onChange={(l) => set("links", l)} />
+          <label>Estado
+            <select value={f.status} onChange={(e) => set("status", e.target.value)}>
+              {VSTATUS.map((s) => <option key={s}>{s}</option>)}
+            </select>
+          </label>
+          <p className="hint">“Em pesquisa” exige ≥1 link · “Escolhido” em diante exige exatamente 1 link.</p>
+        </>
+      )}
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
         <button className="btn ember" onClick={submit}>Guardar transporte</button>
@@ -911,7 +1158,8 @@ function TaskFormModal({ task, vac, members, onSave, onDelete, onClose }) {
     <VModal title={editing ? "Editar tarefa" : "Nova tarefa"} onClose={onClose}>
       <label>Tarefa<input placeholder="ex.: Alugar carro em Split" value={f.title} onChange={(e) => set("title", e.target.value)} autoFocus /></label>
       <label>Data limite (opcional)<input type="date" value={f.dueDate} onChange={(e) => set("dueDate", e.target.value)} /></label>
-      <span className="klabel">Responsáveis</span>
+      <span className="klabel">Responsáveis (participantes confirmados)</span>
+      {members.length === 0 && <p className="hint">Ainda não há participantes confirmados — confirma a participação no Resumo.</p>}
       <div className="pill-row">
         {members.map((m) => (
           <button key={m.id} type="button" className={`pill ${f.assignees.includes(m.id) ? "on" : ""}`} onClick={() => toggle(m.id)}>{m.name}</button>
@@ -951,6 +1199,9 @@ function FeriasStyle() {
       .vlinks a { opacity: .85; word-break: break-all; }
       .vlink-row { display: flex; align-items: center; gap: 6px; font-size: 13px; margin: 2px 0; }
       .vlink-row a { flex: 1; word-break: break-all; }
+      .vmap { height: 340px; border-radius: 12px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,.1); overflow: hidden; position: relative; z-index: 0; }
+      .vmap-pin { width: 26px; height: 26px; border-radius: 50%; background: #FF7A3D; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
+      .vmap .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
     `}</style>
   );
 }
