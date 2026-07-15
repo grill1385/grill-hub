@@ -151,6 +151,18 @@ const fromVTransport = (t) => ({
   price_person: t.pricePerson ?? null, links: t.links || [], status: t.status || "Por pesquisar",
   is_general: !!t.isGeneral, name: t.name || null, date_end: t.dateEnd || null, general_id: t.generalId || null,
 });
+const toVPurchase = (r) => ({
+  id: r.id, vacationId: r.vacation_id, description: r.description, total: Number(r.total),
+  payerId: r.payer_member_id, participants: r.participants || [],
+  settled: r.settled || {}, split: r.split || "equal", shares: r.shares || {},
+  createdAt: r.created_at || null,
+});
+/* created_at fica de fora: é definido pela BD no insert e não deve ser pisado */
+const fromVPurchase = (p) => ({
+  id: p.id, vacation_id: p.vacationId, description: p.description, total: p.total,
+  payer_member_id: p.payerId || null, participants: p.participants || [],
+  settled: p.settled || {}, split: p.split || "equal", shares: p.shares || {},
+});
 const toVTask = (r) => ({
   id: r.id, vacationId: r.vacation_id, autoKey: r.auto_key, title: r.title,
   assignees: r.assignees || [], dueDate: r.due_date, done: !!r.done,
@@ -162,12 +174,13 @@ const fromVTask = (t) => ({
 
 export const feriasApi = {
   async loadAll() {
-    const [vacations, places, stays, transports, tasks] = await Promise.all([
+    const [vacations, places, stays, transports, tasks, purchases] = await Promise.all([
       supabase.from("vacations").select("*"),
       supabase.from("vacation_places").select("*"),
       supabase.from("vacation_stays").select("*"),
       supabase.from("vacation_transports").select("*"),
       supabase.from("vacation_tasks").select("*"),
+      supabase.from("vacation_purchases").select("*"),
     ]);
     for (const r of [vacations, places, stays, transports, tasks]) if (r.error) throw r.error;
     return {
@@ -176,6 +189,8 @@ export const feriasApi = {
       stays: stays.data.map(toVStay),
       transports: transports.data.map(toVTransport),
       tasks: tasks.data.map(toVTask),
+      /* tolerante: se a migração setup-ferias-contas.sql ainda não correu, segue sem contas */
+      purchases: purchases.error ? [] : purchases.data.map(toVPurchase),
     };
   },
   async saveVacation(v) { const { error } = await supabase.from("vacations").upsert(fromVacation(v)); if (error) throw error; },
@@ -197,5 +212,7 @@ export const feriasApi = {
   async saveTransport(t) { const { error } = await supabase.from("vacation_transports").upsert(fromVTransport(t)); if (error) throw error; },
   async deleteTransport(id) { const { error } = await supabase.from("vacation_transports").delete().eq("id", id); if (error) throw error; },
   async saveTask(t) { const { error } = await supabase.from("vacation_tasks").upsert(fromVTask(t)); if (error) throw error; },
+  async savePurchase(p) { const { error } = await supabase.from("vacation_purchases").upsert(fromVPurchase(p)); if (error) throw error; },
+  async deletePurchase(id) { const { error } = await supabase.from("vacation_purchases").delete().eq("id", id); if (error) throw error; },
   async deleteTask(id) { const { error } = await supabase.from("vacation_tasks").delete().eq("id", id); if (error) throw error; },
 };

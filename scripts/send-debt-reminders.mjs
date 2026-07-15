@@ -25,6 +25,15 @@ const [events, purchases, members] = await Promise.all([
   get(`${SB}/rest/v1/purchases?select=*`),
   get(`${SB}/rest/v1/members?select=*`),
 ]);
+/* contas das férias (tolerante: tabelas podem ainda não existir) */
+async function tryGet(url) {
+  const r = await fetch(url, { headers: H });
+  return r.ok ? r.json() : [];
+}
+const [vacations, vacPurchases] = await Promise.all([
+  tryGet(`${SB}/rest/v1/vacations?select=*`),
+  tryGet(`${SB}/rest/v1/vacation_purchases?select=*`),
+]);
 
 const mem = Object.fromEntries(members.map((m) => [m.id, m]));
 // dívidas por membro: [{eventName, desc, amount, payerName}]
@@ -45,6 +54,29 @@ for (const pu of purchases) {
     if (share <= 0) continue;
     (debts[mid] = debts[mid] || []).push({
       eventName: ev.name, desc: pu.description, amount: share,
+      payerName: mem[pu.payer_member_id]?.name || "?",
+    });
+  }
+}
+
+/* dívidas das férias: lembrete 3 dias depois de a compra ser registada e depois semanalmente */
+for (const pu of vacPurchases) {
+  const vac = vacations.find((v) => v.id === pu.vacation_id);
+  if (!vac) continue;
+  const created = (pu.created_at || "").slice(0, 10);
+  if (!created) continue;
+  const d = diasDesde(created);
+  if (d < 3 || (d - 3) % 7 !== 0) continue;
+  const parts = pu.participants || [];
+  if (!parts.length) continue;
+  for (const mid of parts) {
+    if (mid === pu.payer_member_id || pu.settled?.[mid]) continue;
+    const share = pu.split === "custom"
+      ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
+      : Math.round((Number(pu.total) / parts.length) * 100) / 100;
+    if (share <= 0) continue;
+    (debts[mid] = debts[mid] || []).push({
+      eventName: `Férias: ${vac.name}`, desc: pu.description, amount: share,
       payerName: mem[pu.payer_member_id]?.name || "?",
     });
   }

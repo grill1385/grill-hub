@@ -67,6 +67,11 @@ function statusBlocker(target, links) {
   return null;
 }
 
+const shareOf = (pu, mid) =>
+  pu.split === "custom"
+    ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
+    : (pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0);
+
 const placeName = (p) => (p ? p.city + (p.country ? ` (${p.country})` : "") : "?");
 const endName = (placeId, places) => (placeId ? placeName(places.find((p) => p.id === placeId)) : "Casinha");
 const transportLabel = (t, places) => `${endName(t.fromPlaceId, places)} → ${endName(t.toPlaceId, places)}`;
@@ -282,6 +287,14 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
     } catch (e) { console.error(e); showToast("Não foi possível atualizar."); }
   }
 
+  async function togglePurchaseSettled(pu, memberId) {
+    const next = { ...pu, settled: { ...(pu.settled || {}), [memberId]: !pu.settled?.[memberId] } };
+    try {
+      await feriasApi.savePurchase(next);
+      setFd((d) => ({ ...d, purchases: d.purchases.map((x) => (x.id === pu.id ? next : x)) }));
+    } catch (e) { console.error(e); showToast("Não foi possível atualizar o saldado."); }
+  }
+
   /* ---------- confirmações de participação ---------- */
   function patchVacation(id, patch) {
     setFd((d) => ({ ...d, vacations: d.vacations.map((v) => (v.id === id ? { ...v, ...patch } : v)) }));
@@ -348,6 +361,9 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onEditTransport={(id) => setModal({ type: "transportForm", id })}
           onAddTask={() => setModal({ type: "taskForm" })}
           onEditTask={(id) => setModal({ type: "taskForm", id })}
+          onAddPurchase={() => setModal({ type: "purchaseForm" })}
+          onEditPurchase={(id) => setModal({ type: "purchaseForm", id })}
+          onToggleSettled={togglePurchaseSettled}
           onStayStatus={(s, st) => setItemStatus("stays", s, st, feriasApi.saveStay)}
           onTransportStatus={(t, st) => setItemStatus("transports", t, st, feriasApi.saveTransport)}
           onToggleAssignee={(task, mid) => toggleAssignee(vac, task, mid)}
@@ -388,6 +404,12 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           places={fd.places.filter((p) => p.vacationId === vac.id)} showToast={showToast}
           onSave={(t) => save("transports", t, feriasApi.saveTransport, "Transporte")}
           onDelete={(id) => remove("transports", id, feriasApi.deleteTransport, "Transporte")}
+          onClose={() => setModal(null)} />
+      )}
+      {modal?.type === "purchaseForm" && vac && (
+        <VacPurchaseFormModal purchase={fd.purchases.find((x) => x.id === modal.id)} vac={vac} members={members}
+          onSave={(x) => save("purchases", x, feriasApi.savePurchase, "Compra")}
+          onDelete={(id) => remove("purchases", id, feriasApi.deletePurchase, "Compra")}
           onClose={() => setModal(null)} />
       )}
       {modal?.type === "taskForm" && vac && (
@@ -449,6 +471,7 @@ function VacationDetail(props) {
   const stays = fd.stays.filter((s) => s.vacationId === vac.id);
   const transports = fd.transports.filter((t) => t.vacationId === vac.id)
     .sort((a, b) => (a.date || "9999").localeCompare(b.date || "9999"));
+  const purchases = (fd.purchases || []).filter((x) => x.vacationId === vac.id);
   const linkedEvent = vac.eventId ? events.find((e) => e.id === vac.eventId) : null;
 
   const tabs = [
@@ -456,6 +479,7 @@ function VacationDetail(props) {
     ["locais", `Locais (${places.length})`],
     ["alojamento", `Alojamento (${stays.length})`],
     ["transportes", `Transportes (${transports.length})`],
+    ["contas", `Contas (${purchases.length})`],
   ];
 
   return (
@@ -483,10 +507,11 @@ function VacationDetail(props) {
         ))}
       </div>
 
-      {sub === "resumo" && <SummaryView {...props} places={places} stays={stays} transports={transports} linkedEvent={linkedEvent} />}
+      {sub === "resumo" && <SummaryView {...props} places={places} stays={stays} transports={transports} purchases={purchases} linkedEvent={linkedEvent} />}
       {sub === "locais" && <PlacesView {...props} places={places} stays={stays} transports={transports} />}
       {sub === "alojamento" && <StaysView {...props} places={places} stays={stays} />}
       {sub === "transportes" && <TransportsView {...props} places={places} transports={transports} />}
+      {sub === "contas" && <ContasView {...props} purchases={purchases} />}
     </>
   );
 }
@@ -542,7 +567,7 @@ function ParticipationSection({ vac, members, myMember, isAdmin, isPast, onToggl
 }
 
 /* ---------- Resumo: participação + tarefas + custos ---------- */
-function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyConfirmation, onSetMemberConfirmation, places, stays, transports, linkedEvent, showToast, onAddTask, onEditTask, onToggleAssignee, onToggleTaskDone, setSub }) {
+function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyConfirmation, onSetMemberConfirmation, places, stays, transports, purchases, linkedEvent, showToast, onAddTask, onEditTask, onToggleAssignee, onToggleTaskDone, setSub }) {
   const stored = fd.tasks.filter((t) => t.vacationId === vac.id);
   const auto = computeAutoTasks(vac, places, stays, transports).map((a) => {
     const row = stored.find((t) => t.autoKey === a.autoKey) || null;
@@ -624,6 +649,11 @@ function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyC
         <div><span className="klabel">Alojamento (por pessoa)</span>{stayTotal ? eur(stayTotal / (nPeople || 1)) : "—"}</div>
         <div><span className="klabel">Transportes (por pessoa)</span>{transpPP ? eur(transpPP) : "—"}</div>
         <div><span className="klabel">Total por pessoa</span>{stayTotal || transpPP ? eur(totalPP) : "—"}</div>
+        <div><span className="klabel">Contas registadas</span>
+          {(purchases || []).length
+            ? <a href="#" onClick={(e) => { e.preventDefault(); setSub("contas"); }}>{eur(purchases.reduce((acc, x) => acc + (Number(x.total) || 0), 0))} ({purchases.length})</a>
+            : "—"}
+        </div>
       </div>
       <p className="hint">
         Por pessoa a dividir por {nPeople} {nVacConfirm ? "confirmado(s) nestas férias" : nEvConfirm ? "confirmado(s) no evento ligado" : "membro(s) do Grill (confirmem a participação lá em cima para afinar)"}.
@@ -960,6 +990,73 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
   );
 }
 
+/* ---------- Contas ---------- */
+function ContasView({ vac, members, canEdit, isAdmin, purchases, onAddPurchase, onEditPurchase, onToggleSettled }) {
+  /* dívidas em aberto para o lembrete por email */
+  const owing = {};
+  purchases.forEach((pu) => {
+    (pu.participants || []).forEach((mid) => {
+      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
+    });
+  });
+  const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
+  const mailtoBody = Object.keys(owing).map((id) => {
+    const m = members.find((x) => x.id === id);
+    return `${m?.name || id}: ${eur(owing[id])} em dívida`;
+  }).join("\n");
+  const mailtoHref = owingEmails.length
+    ? `mailto:${owingEmails.join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar: ${vac.name}`)}&body=${encodeURIComponent(`Olá! Há contas por saldar das férias "${vac.name}":\n\n${mailtoBody}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`
+    : null;
+
+  return (
+    <div>
+      <div className="section-head" style={{ marginBottom: 8 }}>
+        <h3 style={{ margin: 0 }}>Contas</h3>
+        {canEdit && <button className="btn ember" onClick={onAddPurchase}>+ Compra</button>}
+      </div>
+      {purchases.length === 0 && <p className="empty">Sem contas ainda. Regista compras (voos, alojamento, carrinha…) para dividir pelos participantes.</p>}
+      {purchases.map((pu) => {
+        const parts = pu.participants || [];
+        const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
+        const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
+        const payer = members.find((m) => m.id === pu.payerId);
+        return (
+          <div key={pu.id} className="purchase">
+            <div className="purchase-head">
+              <strong>{pu.description}</strong>
+              <span className="purchase-total">{eur(pu.total)}</span>
+              {canEdit && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
+            </div>
+            <div className="hint" style={{ marginTop: 0 }}>
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}
+            </div>
+            <div className="pill-row">
+              {parts.map((mid) => {
+                const m = members.find((x) => x.id === mid);
+                if (!m) return null;
+                const done = isSet(mid);
+                return (
+                  <button key={mid} className={`pill ${done ? "on" : ""}`}
+                    title={mid === pu.payerId ? "Pagou a compra" : isAdmin ? "Alternar saldado (admin)" : ""}
+                    onClick={() => isAdmin && mid !== pu.payerId && onToggleSettled(pu, mid)}>
+                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(shareOf(pu, mid))}`}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      {isAdmin && mailtoHref && (
+        <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>
+        </div>
+      )}
+      <p className="hint">Quem deve recebe também lembretes automáticos por email (grillfeup@gmail.com): 3 dias depois da compra e depois semanalmente, enquanto não saldar.</p>
+    </div>
+  );
+}
+
 /* ============================================================
    FORMULÁRIOS
    ============================================================ */
@@ -1250,6 +1347,98 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
   );
 }
 
+function VacPurchaseFormModal({ purchase, vac, members, onSave, onDelete, onClose }) {
+  const editing = !!purchase;
+  /* só membros com participação confirmada nas férias (+ quem já constava na compra) */
+  const eligible = members.filter((m) => vac.confirmations?.[m.id]
+    || (purchase?.participants || []).includes(m.id) || purchase?.payerId === m.id);
+  const defaultParts = purchase ? purchase.participants : eligible.map((m) => m.id);
+  const [f, setF] = useState(() => ({
+    id: purchase?.id || uid(), vacationId: vac.id,
+    description: purchase?.description || "",
+    total: purchase?.total ?? "",
+    payerId: purchase?.payerId || eligible[0]?.id || "",
+    participants: defaultParts,
+    settled: { ...(purchase?.settled || {}) },
+    split: purchase?.split || "equal",
+    shares: { ...(purchase?.shares || {}) },
+  }));
+  const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
+  const toggleP = (id) =>
+    set("participants", f.participants.includes(id) ? f.participants.filter((x) => x !== id) : [...f.participants, id]);
+  const share = f.participants.length && Number(f.total) > 0
+    ? Math.round((Number(f.total) / f.participants.length) * 100) / 100 : 0;
+  const sumShares = Math.round(f.participants.reduce((acc, id) => acc + (Number(f.shares[id]) || 0), 0) * 100) / 100;
+  const sumOk = Math.abs(sumShares - (Number(f.total) || 0)) < 0.005;
+
+  function submit() {
+    if (!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length) return;
+    if (f.split === "custom" && !sumOk) return;
+    onSave({
+      id: f.id, vacationId: vac.id, description: f.description.trim(),
+      total: Math.round(Number(f.total) * 100) / 100,
+      payerId: f.payerId, participants: f.participants, settled: f.settled,
+      split: f.split,
+      shares: f.split === "custom"
+        ? Object.fromEntries(f.participants.map((id) => [id, Math.round((Number(f.shares[id]) || 0) * 100) / 100]))
+        : {},
+    });
+  }
+
+  return (
+    <VModal title={editing ? "Editar compra" : "Nova compra"} onClose={onClose} wide>
+      {eligible.length === 0 && <p className="hint">Ainda não há participantes confirmados — confirma a participação no Resumo primeiro.</p>}
+      <label>Descrição<input value={f.description} onChange={(e) => set("description", e.target.value)} autoFocus placeholder="ex.: Voos Porto → Sarajevo" /></label>
+      <div className="row">
+        <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
+        <label>Quem pagou (a quem devem)
+          <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
+            {eligible.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+      </div>
+      <label>Divisão
+        <div className="segmented">
+          <button type="button" className={f.split === "equal" ? "on" : ""} onClick={() => set("split", "equal")}>Divisão por todos</button>
+          <button type="button" className={f.split === "custom" ? "on" : ""} onClick={() => set("split", "custom")}>Só pago o que usufruo</button>
+        </div>
+      </label>
+      <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
+      <div className="pill-row">
+        {eligible.map((m) => (
+          <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
+        ))}
+      </div>
+      {f.split === "custom" && (
+        <>
+          <div className="shares-grid">
+            {f.participants.map((id) => {
+              const m = members.find((x) => x.id === id);
+              return (
+                <label key={id}>{m?.name || id} (€)
+                  <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
+                    onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
+                </label>
+              );
+            })}
+          </div>
+          {!sumOk && (
+            <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+          )}
+        </>
+      )}
+      <div className="actions">
+        {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
+        <button className="btn ember"
+          disabled={!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length || (f.split === "custom" && !sumOk)}
+          onClick={submit}>
+          Guardar compra
+        </button>
+      </div>
+    </VModal>
+  );
+}
+
 function TaskFormModal({ task, vac, members, onSave, onDelete, onClose }) {
   const editing = !!task;
   const [f, setF] = useState(() => ({
@@ -1287,14 +1476,14 @@ function FeriasStyle() {
     <style>{`
       .vac-chip { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: rgba(255,255,255,.07); color: inherit; opacity: .9; white-space: nowrap; }
       .vac-chip.big { font-size: 13px; }
-      .vac-back { text-decoration: none; opacity: .65; font-size: 15px; margin-right: 4px; }
+      .vac-back { text-decoration: none; opacity: .85; font-size: 15px; margin-right: 4px; color: #F5C168; }
       .vac-back:hover { opacity: 1; }
       .vtask-list { display: flex; flex-direction: column; gap: 8px; }
       .vtask { padding: 10px 12px; border-radius: 10px; background: rgba(255,255,255,.045); border: 1px solid rgba(255,255,255,.07); }
       .vtask.done { opacity: .55; }
       .vtask-main { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
       .vtask-title { flex: 1; min-width: 200px; }
-      .vtask-jump { font-size: 12px; margin-left: 8px; opacity: .7; }
+      .vtask-jump { font-size: 12px; margin-left: 8px; opacity: .9; color: #F5C168; }
       .vtask-due { font-size: 12px; opacity: .75; white-space: nowrap; }
       .vtask-due.late { color: #ff8a5c; opacity: 1; font-weight: 600; }
       .vplace-info { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; font-size: 14px; }

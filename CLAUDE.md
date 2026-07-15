@@ -13,14 +13,14 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - React 18 + Vite, SPA. `src/App.jsx` (~1900 linhas: componente App + todos os modais), `src/Ferias.jsx` (aba Férias), `src/api.js` (todo o acesso ao Supabase), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
-- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`.
+- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`.
 - GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
 
 - `members` (id, name, email, birth_date, join_date, role_id, username, avatar_url) — conta liga-se a membro por email igual.
 - `events` (datas, status "Por planear/Agendado/Concluído", `presences` jsonb, `confirmations` jsonb RSVP), `roles` (label, level), `admins` (email, is_main), `purchases` (contas por evento, split equal/custom, settled, receipts), `profiles` (contas auth pendentes de ligação).
-- Férias (jul 2026): `vacations` (name, date_start/end, event_id opcional, notes, `confirmations` jsonb {memberId: bool}), `vacation_places` (city, country, arrive/depart_date, sort), `vacation_stays` (place_id, check_in/out + horas, price_night_person, price_total, links jsonb, status), `vacation_transports` (from/to_place_id — null = "Casinha" (casa, início/fim), kind, date, time, price_person, links, status; is_general/name/date_end = transporte geral tipo carrinha alugada com período de uso; general_id liga um deslocamento a um geral), `vacation_tasks` (auto_key null = manual; assignees jsonb, due_date, done).
+- Férias (jul 2026): `vacations` (name, date_start/end, event_id opcional, notes, `confirmations` jsonb {memberId: bool}), `vacation_places` (city, country, arrive/depart_date, sort), `vacation_stays` (place_id, check_in/out + horas, price_night_person, price_total, links jsonb, status), `vacation_transports` (from/to_place_id — null = "Casinha" (casa, início/fim), kind, date, time, price_person, links, status; is_general/name/date_end = transporte geral tipo carrinha alugada com período de uso; general_id liga um deslocamento a um geral), `vacation_tasks` (auto_key null = manual; assignees jsonb, due_date, done), `vacation_purchases` (igual a purchases mas com vacation_id e created_at; split equal="Divisão por todos"/custom="Só pago o que usufruo").
 
 ## Aba "Férias do Grill" (src/Ferias.jsx) — regras
 
@@ -32,7 +32,8 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Transporte geral: preço, links e estado ficam no geral; deslocamentos ligados (general_id) não têm preço/estado próprios na UI e não contam nos custos (o geral conta uma vez).
 - Mapa no Roteiro (RouteMap): Leaflet + tiles Carto dark; geocoding das cidades via Nominatim com cache em localStorage (`grill-geo:*`); se um alojamento tiver link Google Maps com coordenadas (@lat,lng, q=, !3d!4d), usa-se essa morada; trajeto por trechos clicáveis via OSRM público (router.project-osrm.org, um pedido por par consecutivo), fallback linhas retas; clique num trecho destaca-o e mostra popup (transporte do deslocamento, datas partida/chegada, hora, distância km e tempo estimado por modo — velocidades assumidas: avião 750 km/h + 45min, comboio 90, autocarro ~OSRM×1.25, barco 35, carro = OSRM); popups dos pins com datas/noites/alojamentos; pins sobrepostos agrupam-se (1·6). Transportes: aparecem 6 meses antes do início, prazo 3 meses antes. Alojamento: aparecem 4 meses antes, prazo 2 meses antes. Atribuição de membros persiste em `vacation_tasks` por `auto_key`; tarefas manuais também existem (done toggle).
 - Participação (Resumo, secção colapsável mostrar/esconder): cada membro confirma/desconfirma a sua via RPC `set_my_vacation_confirmation` (bloqueia férias passadas); admins alteram qualquer confirmação (update direto só à coluna `confirmations`, também em férias passadas — para histórico). `fromVacation` NÃO envia confirmations para o upsert não pisar alterações concorrentes.
-- Custos no Resumo: total alojamento (price_total), transportes €/pessoa; divisão por confirmados das férias, senão confirmados do evento ligado, senão nº de membros.
+- Custos no Resumo: total alojamento (price_total), transportes €/pessoa; divisão por confirmados das férias, senão confirmados do evento ligado, senão nº de membros. Mostra também o total das contas registadas (link para a sub-aba Contas).
+- Contas (sub-aba): compras com pagador obrigatório, participantes = confirmados nas férias, divisão equal/custom (custom valida soma = total); membros criam/editam, só admins alternam saldado e veem o botão de lembrete (mailto). Lembretes automáticos via send-debt-reminders.mjs: 3 dias após created_at da compra e depois semanalmente (sender grillfeup@gmail.com via Brevo).
 - Escrita: qualquer conta ligada a um membro (canEdit = session && (isAdmin || myMember)).
 
 ## Estado atual / pendentes
@@ -40,6 +41,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Aba Férias publicada (commit 2ddb592, jul 2026). Pré-requisito: `setup-ferias.sql` corrido no SQL Editor — confirmar com o David se já foi feito.
 - Confirmações de participação nas férias (jul 2026). Pré-requisito: `setup-ferias-confirmacoes.sql` corrido no SQL Editor — confirmar com o David.
 - Transportes gerais + mapa do roteiro (jul 2026). Pré-requisito: `setup-ferias-transporte-geral.sql` corrido no SQL Editor — confirmar com o David.
+- Contas das férias (jul 2026). Pré-requisito: `setup-ferias-contas.sql` corrido no SQL Editor — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Convenções
