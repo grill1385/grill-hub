@@ -14,7 +14,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
 - Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`.
-- GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
+- GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos — só a quem ainda não confirmou presença + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
 
@@ -48,5 +48,6 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 - Tudo em PT-PT, tom informal (ex.: "Casinha", "A acender a brasa…").
 - IDs: `uid()` aleatório em texto; BD snake_case ↔ app camelCase (converters em api.js).
+- Layout: `.content` ocupa toda a largura (sem max-width); `.cards` é grelha responsiva auto-fill minmax(360px,1fr) — 1 coluna no telemóvel.
 - UI: classes CSS do `Style()` em App.jsx (card, btn ember/ghost/danger, pill, segmented, section-head, hint, empty, modal/overlay, detail-grid, status…). Ferias.jsx tem estilos próprios prefixados `v` (FeriasStyle).
 - Commits em português, mensagem descritiva; push para `main` = deploy.

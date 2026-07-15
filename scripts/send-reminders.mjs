@@ -1,5 +1,6 @@
 /* Lembretes de eventos — corre diariamente via GitHub Actions.
-   Envia email aos membros 3 dias antes de cada evento "Agendado".
+   Envia email 3 dias antes de cada evento "Agendado", mas SÓ aos
+   membros que ainda não confirmaram presença.
    Lê as tabelas events/members do Supabase. */
 
 const SB = "https://noperkfdcdairrpnomrs.supabase.co";
@@ -34,6 +35,7 @@ for (const ev of events) {
   const quando = fmtDate(ev.date_start) + (ev.date_end ? ` até ${fmtDate(ev.date_end)}` : "");
   const local = ev.location ? `<p>📍 ${ev.location}${ev.location_url ? ` — <a href="${ev.location_url}">mapa</a>` : ""}</p>` : "";
   for (const m of members) {
+    if (ev.confirmations?.[m.id]) continue; // já confirmou — não precisa de lembrete
     const r = await fetch("https://api.brevo.com/v3/smtp/email", {
       method: "POST",
       headers: { "api-key": BREVO_KEY, "Content-Type": "application/json" },
@@ -44,7 +46,7 @@ for (const ev of events) {
         htmlContent: `
           <div style="font-family:sans-serif;max-width:520px">
             <h2 style="color:#E85D1F">🔥 ${ev.name}</h2>
-            <p>Olá ${m.name}! O evento está agendado para <b>${quando}</b>.</p>
+            <p>Olá ${m.name}! O evento está agendado para <b>${quando}</b> e ainda não confirmaste presença.</p>
             ${ev.description ? `<p>${ev.description}</p>` : ""}
             ${local}
             <p><a href="${SITE}" style="color:#E85D1F">Ver no Presenças do Grill →</a></p>

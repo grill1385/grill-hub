@@ -1673,7 +1673,7 @@ function Style() {
       .navbtn { text-align:left; background:none; border:none; color:var(--muted); padding:10px 12px; border-radius:8px; cursor:pointer; font:inherit; font-weight:500; border-left:3px solid transparent; }
       .navbtn:hover { color:var(--text); background:var(--surface); }
       .navbtn.active { color:var(--text); background:var(--surface); border-left-color:var(--ember); }
-      .content { flex:1; padding:24px 28px; max-width:960px; }
+      .content { flex:1; padding:24px 28px; min-width:0; }
 
       .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
       .head-actions { display:flex; gap:10px; align-items:center; }
@@ -1692,7 +1692,7 @@ function Style() {
       .iconbtn:hover { color:var(--ember); background:var(--surface2); }
 
       .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; }
-      .cards { display:flex; flex-direction:column; gap:10px; }
+      .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:10px; align-items:start; }
       .cards.grid2 { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
       .event-card { cursor:pointer; transition:border-color .15s; }
       .event-card:hover { border-color:var(--ember); }
