@@ -255,6 +255,29 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
     } catch (e) { console.error(e); showToast("Não foi possível atualizar."); }
   }
 
+  /* ---------- confirmações de participação ---------- */
+  function patchVacation(id, patch) {
+    setFd((d) => ({ ...d, vacations: d.vacations.map((v) => (v.id === id ? { ...v, ...patch } : v)) }));
+  }
+
+  async function toggleMyConfirmation(vac) {
+    if (!myMember) return;
+    const next = !vac.confirmations?.[myMember.id];
+    try {
+      await feriasApi.setMyVacationConfirmation(vac.id, next);
+      patchVacation(vac.id, { confirmations: { ...(vac.confirmations || {}), [myMember.id]: next } });
+      showToast(next ? "Participação confirmada!" : "Confirmação removida.");
+    } catch (e) { console.error(e); showToast("Não foi possível confirmar. Já correram o setup-ferias-confirmacoes.sql?"); }
+  }
+
+  async function setMemberConfirmation(vac, memberId, value) {
+    const confirmations = { ...(vac.confirmations || {}), [memberId]: value };
+    try {
+      await feriasApi.saveVacationConfirmations(vac.id, confirmations);
+      patchVacation(vac.id, { confirmations });
+    } catch (e) { console.error(e); showToast("Não foi possível alterar a confirmação."); }
+  }
+
   /* ---------- estados de carregamento ---------- */
   if (loadErr) {
     return (
@@ -284,6 +307,9 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onNew={() => setModal({ type: "vacForm" })} />
       ) : (
         <VacationDetail vac={vac} fd={fd} members={members} events={events} canEdit={canEdit}
+          myMember={myMember} isAdmin={isAdmin}
+          onToggleMyConfirmation={() => toggleMyConfirmation(vac)}
+          onSetMemberConfirmation={(mid, value) => setMemberConfirmation(vac, mid, value)}
           sub={sub} setSub={setSub} showToast={showToast}
           onBack={() => setSel(null)}
           onEdit={() => setModal({ type: "vacForm", id: vac.id })}
@@ -416,6 +442,9 @@ function VacationDetail(props) {
         <span className="vac-chip big">{fmtDate(vac.dateStart)} → {fmtDate(vac.dateEnd)}</span>
         {nights != null && <span className="vac-chip big">{nights + 1} dias · {nights} noites</span>}
         {linkedEvent && <span className="vac-chip big">Evento: {linkedEvent.name}</span>}
+        {Object.values(vac.confirmations || {}).filter(Boolean).length > 0 && (
+          <span className="vac-chip big">{Object.values(vac.confirmations || {}).filter(Boolean).length} confirmados</span>
+        )}
       </div>
       {vac.notes && <p className="hint" style={{ marginTop: 0 }}>{vac.notes}</p>}
 
@@ -433,8 +462,50 @@ function VacationDetail(props) {
   );
 }
 
-/* ---------- Resumo: tarefas + custos ---------- */
-function SummaryView({ vac, fd, members, canEdit, places, stays, transports, linkedEvent, showToast, onAddTask, onEditTask, onToggleAssignee, onToggleTaskDone, setSub }) {
+/* ---------- Participação: membro confirma a sua, admin edita todas ---------- */
+function ParticipationSection({ vac, members, myMember, isAdmin, isPast, onToggleMine, onSetMember }) {
+  const conf = vac.confirmations || {};
+  const n = Object.values(conf).filter(Boolean).length;
+  const mine = myMember ? !!conf[myMember.id] : false;
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div className="section-head" style={{ marginBottom: 8 }}>
+        <h3 style={{ margin: 0 }}>Participação{n > 0 ? ` (${n})` : ""}</h3>
+        {myMember && !isPast && (
+          <button className={`btn small ${mine ? "ghost" : "ember"}`} onClick={onToggleMine}>
+            {mine ? "Cancelar confirmação" : "Confirmar participação"}
+          </button>
+        )}
+      </div>
+      <div className="pill-row">
+        {members.map((m) => {
+          const on = !!conf[m.id];
+          const isMine = myMember?.id === m.id;
+          const clickable = isAdmin || (isMine && !isPast);
+          return (
+            <button key={m.id} type="button" className={`pill ${on ? "on" : ""}`} disabled={!clickable}
+              title={isAdmin ? "Alterar confirmação (admin)" : isMine ? "A tua confirmação" : ""}
+              onClick={() => {
+                if (!clickable) return;
+                if (isMine && !isAdmin) onToggleMine();
+                else onSetMember(m.id, !on);
+              }}>
+              {m.name}{on ? " ✓" : ""}
+            </button>
+          );
+        })}
+      </div>
+      <p className="hint">
+        {isPast
+          ? "Férias já realizadas — só admins podem ajustar quem foi (para histórico)."
+          : "Confirma a tua participação — os custos por pessoa dividem-se pelos confirmados. Admins podem alterar qualquer confirmação."}
+      </p>
+    </div>
+  );
+}
+
+/* ---------- Resumo: participação + tarefas + custos ---------- */
+function SummaryView({ vac, fd, members, canEdit, myMember, isAdmin, onToggleMyConfirmation, onSetMemberConfirmation, places, stays, transports, linkedEvent, showToast, onAddTask, onEditTask, onToggleAssignee, onToggleTaskDone, setSub }) {
   const stored = fd.tasks.filter((t) => t.vacationId === vac.id);
   const auto = computeAutoTasks(vac, places, stays, transports).map((a) => {
     const row = stored.find((t) => t.autoKey === a.autoKey) || null;
@@ -445,9 +516,10 @@ function SummaryView({ vac, fd, members, canEdit, places, stays, transports, lin
   const done = manual.filter((t) => t.done);
   const today = todayISO();
 
-  /* custos */
-  const nConfirm = linkedEvent ? Object.values(linkedEvent.confirmations || {}).filter(Boolean).length : 0;
-  const nPeople = nConfirm || members.length;
+  /* custos: divide pelos confirmados das férias; senão pelos do evento ligado; senão por todos */
+  const nVacConfirm = Object.values(vac.confirmations || {}).filter(Boolean).length;
+  const nEvConfirm = linkedEvent ? Object.values(linkedEvent.confirmations || {}).filter(Boolean).length : 0;
+  const nPeople = nVacConfirm || nEvConfirm || members.length;
   const stayTotal = stays.reduce((acc, s) => acc + (Number(s.priceTotal) || 0), 0);
   const transpPP = transports.reduce((acc, t) => acc + (Number(t.pricePerson) || 0), 0);
   const totalPP = stayTotal / (nPeople || 1) + transpPP;
@@ -456,6 +528,9 @@ function SummaryView({ vac, fd, members, canEdit, places, stays, transports, lin
 
   return (
     <div>
+      <ParticipationSection vac={vac} members={members} myMember={myMember} isAdmin={isAdmin} isPast={isPast}
+        onToggleMine={onToggleMyConfirmation} onSetMember={onSetMemberConfirmation} />
+
       <div className="section-head" style={{ marginBottom: 8 }}>
         <h3 style={{ margin: 0 }}>Lista de tarefas</h3>
         {canEdit && <button className="btn ghost small" onClick={onAddTask}>+ Tarefa manual</button>}
@@ -510,7 +585,7 @@ function SummaryView({ vac, fd, members, canEdit, places, stays, transports, lin
         <div><span className="klabel">Total por pessoa</span>{stayTotal || transpPP ? eur(totalPP) : "—"}</div>
       </div>
       <p className="hint">
-        Por pessoa a dividir por {nPeople} {nConfirm ? "confirmado(s) no evento ligado" : "membro(s) do Grill (liga um evento com confirmações para afinar)"}.
+        Por pessoa a dividir por {nPeople} {nVacConfirm ? "confirmado(s) nestas férias" : nEvConfirm ? "confirmado(s) no evento ligado" : "membro(s) do Grill (confirmem a participação lá em cima para afinar)"}.
         Só entram alojamentos com preço total e transportes com preço por pessoa.
       </p>
     </div>

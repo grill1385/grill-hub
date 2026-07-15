@@ -107,7 +107,11 @@ export const api = {
 const toVacation = (r) => ({
   id: r.id, name: r.name, dateStart: r.date_start, dateEnd: r.date_end,
   eventId: r.event_id, notes: r.notes || "",
+  confirmations: r.confirmations || {},
 });
+/* confirmations fica de fora de propósito: é gerido por
+   set_my_vacation_confirmation (membro) / saveVacationConfirmations (admin),
+   para o upsert das férias não pisar confirmações entretanto alteradas. */
 const fromVacation = (v) => ({
   id: v.id, name: v.name, date_start: v.dateStart, date_end: v.dateEnd,
   event_id: v.eventId || null, notes: v.notes || null,
@@ -173,6 +177,16 @@ export const feriasApi = {
     };
   },
   async saveVacation(v) { const { error } = await supabase.from("vacations").upsert(fromVacation(v)); if (error) throw error; },
+  /* o próprio membro confirma/desconfirma a sua participação (RPC; ver setup-ferias-confirmacoes.sql) */
+  async setMyVacationConfirmation(vacationId, value) {
+    const { error } = await supabase.rpc("set_my_vacation_confirmation", { p_vacation_id: vacationId, p_value: value });
+    if (error) throw error;
+  },
+  /* admin altera as confirmações de qualquer membro (update direto, só a coluna) */
+  async saveVacationConfirmations(vacationId, confirmations) {
+    const { error } = await supabase.from("vacations").update({ confirmations }).eq("id", vacationId);
+    if (error) throw error;
+  },
   async deleteVacation(id) { const { error } = await supabase.from("vacations").delete().eq("id", id); if (error) throw error; },
   async savePlace(p) { const { error } = await supabase.from("vacation_places").upsert(fromVPlace(p)); if (error) throw error; },
   async deletePlace(id) { const { error } = await supabase.from("vacation_places").delete().eq("id", id); if (error) throw error; },
