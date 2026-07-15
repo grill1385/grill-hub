@@ -290,7 +290,7 @@ export default function App() {
   }
 
   function shareEvent(ev) {
-    const url = `https://noperkfdcdairrpnomrs.supabase.co/functions/v1/event-og?id=${encodeURIComponent(ev.id)}`;
+    const url = `https://grill1385.github.io/grill-hub/share/${encodeURIComponent(ev.id)}.html`;
     if (navigator.clipboard?.writeText) {
       navigator.clipboard.writeText(url).then(
         () => showToast("Link copiado — cola no Discord!"),
