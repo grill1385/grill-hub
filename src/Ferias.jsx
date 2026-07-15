@@ -361,7 +361,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onEditTransport={(id) => setModal({ type: "transportForm", id })}
           onAddTask={() => setModal({ type: "taskForm" })}
           onEditTask={(id) => setModal({ type: "taskForm", id })}
-          onAddPurchase={() => setModal({ type: "purchaseForm" })}
+          onAddPurchase={(prefill) => setModal({ type: "purchaseForm", prefill })}
           onEditPurchase={(id) => setModal({ type: "purchaseForm", id })}
           onToggleSettled={togglePurchaseSettled}
           onStayStatus={(s, st) => setItemStatus("stays", s, st, feriasApi.saveStay)}
@@ -407,7 +407,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onClose={() => setModal(null)} />
       )}
       {modal?.type === "purchaseForm" && vac && (
-        <VacPurchaseFormModal purchase={fd.purchases.find((x) => x.id === modal.id)} vac={vac} members={members}
+        <VacPurchaseFormModal purchase={fd.purchases.find((x) => x.id === modal.id)} vac={vac} members={members} prefill={modal.prefill}
           onSave={(x) => save("purchases", x, feriasApi.savePurchase, "Compra")}
           onDelete={(id) => remove("purchases", id, feriasApi.deletePurchase, "Compra")}
           onClose={() => setModal(null)} />
@@ -511,7 +511,7 @@ function VacationDetail(props) {
       {sub === "locais" && <PlacesView {...props} places={places} stays={stays} transports={transports} />}
       {sub === "alojamento" && <StaysView {...props} places={places} stays={stays} />}
       {sub === "transportes" && <TransportsView {...props} places={places} transports={transports} />}
-      {sub === "contas" && <ContasView {...props} purchases={purchases} />}
+      {sub === "contas" && <ContasView {...props} purchases={purchases} places={places} stays={stays} transports={transports} />}
     </>
   );
 }
@@ -991,7 +991,30 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 }
 
 /* ---------- Contas ---------- */
-function ContasView({ vac, members, canEdit, isAdmin, purchases, onAddPurchase, onEditPurchase, onToggleSettled }) {
+function ContasView({ vac, members, canEdit, isAdmin, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled }) {
+  /* cada alojamento/transporte com custo gera uma entrada "por registar" (vira compra com 1 clique) */
+  const linkedKeys = new Set(purchases.map((x) => x.sourceKey).filter(Boolean));
+  const nConf = Object.values(vac.confirmations || {}).filter(Boolean).length;
+  const suggestions = [];
+  stays.forEach((st) => {
+    const key = `stay:${st.id}`;
+    if (linkedKeys.has(key)) return;
+    const p = places.find((x) => x.id === st.placeId);
+    const nights = nightsBetween(st.checkIn, st.checkOut);
+    const total = st.priceTotal != null
+      ? st.priceTotal
+      : (st.priceNightPerson != null && nights && nConf ? Math.round(st.priceNightPerson * nights * nConf * 100) / 100 : null);
+    suggestions.push({ key, desc: st.name || `Alojamento em ${placeName(p)}`, total, tipo: "alojamento" });
+  });
+  transports.forEach((t) => {
+    if (t.generalId) return; // o custo vive no transporte geral
+    const key = `transport:${t.id}`;
+    if (linkedKeys.has(key)) return;
+    const desc = t.isGeneral ? (t.name || "Transporte geral") : `Transporte ${transportLabel(t, places)}`;
+    const total = t.pricePerson != null && nConf ? Math.round(t.pricePerson * nConf * 100) / 100 : null;
+    suggestions.push({ key, desc, total, tipo: "transporte" });
+  });
+
   /* dívidas em aberto para o lembrete por email */
   const owing = {};
   purchases.forEach((pu) => {
@@ -1012,9 +1035,31 @@ function ContasView({ vac, members, canEdit, isAdmin, purchases, onAddPurchase, 
     <div>
       <div className="section-head" style={{ marginBottom: 8 }}>
         <h3 style={{ margin: 0 }}>Contas</h3>
-        {canEdit && <button className="btn ember" onClick={onAddPurchase}>+ Compra</button>}
+        {canEdit && <button className="btn ember" onClick={() => onAddPurchase(null)}>+ Compra</button>}
       </div>
-      {purchases.length === 0 && <p className="empty">Sem contas ainda. Regista compras (voos, alojamento, carrinha…) para dividir pelos participantes.</p>}
+      {suggestions.length > 0 && (
+        <>
+          <h4 style={{ margin: "8px 0" }}>Por registar (dos alojamentos e transportes)</h4>
+          <div className="vtask-list" style={{ marginBottom: 16 }}>
+            {suggestions.map((sg) => (
+              <div key={sg.key} className="vtask">
+                <div className="vtask-main">
+                  <span className="vtask-title">{sg.desc}</span>
+                  <span className="vac-chip">{sg.tipo}</span>
+                  <span className="vac-chip">{sg.total != null ? eur(sg.total) : "sem preço ainda"}</span>
+                  {canEdit && (
+                    <button className="btn ghost small"
+                      onClick={() => onAddPurchase({ desc: sg.desc, total: sg.total, key: sg.key })}>
+                      Registar compra
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      {purchases.length === 0 && suggestions.length === 0 && <p className="empty">Sem contas ainda. Regista compras (voos, alojamento, carrinha…) para dividir pelos participantes.</p>}
       {purchases.map((pu) => {
         const parts = pu.participants || [];
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
@@ -1024,6 +1069,7 @@ function ContasView({ vac, members, canEdit, isAdmin, purchases, onAddPurchase, 
           <div key={pu.id} className="purchase">
             <div className="purchase-head">
               <strong>{pu.description}</strong>
+              {pu.sourceKey && <span className="vac-chip">{pu.sourceKey.startsWith("stay:") ? "alojamento" : "transporte"}</span>}
               <span className="purchase-total">{eur(pu.total)}</span>
               {canEdit && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
             </div>
@@ -1347,7 +1393,7 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
   );
 }
 
-function VacPurchaseFormModal({ purchase, vac, members, onSave, onDelete, onClose }) {
+function VacPurchaseFormModal({ purchase, vac, members, prefill, onSave, onDelete, onClose }) {
   const editing = !!purchase;
   /* só membros com participação confirmada nas férias (+ quem já constava na compra) */
   const eligible = members.filter((m) => vac.confirmations?.[m.id]
@@ -1355,8 +1401,8 @@ function VacPurchaseFormModal({ purchase, vac, members, onSave, onDelete, onClos
   const defaultParts = purchase ? purchase.participants : eligible.map((m) => m.id);
   const [f, setF] = useState(() => ({
     id: purchase?.id || uid(), vacationId: vac.id,
-    description: purchase?.description || "",
-    total: purchase?.total ?? "",
+    description: purchase?.description || prefill?.desc || "",
+    total: purchase?.total ?? (prefill?.total ?? ""),
     payerId: purchase?.payerId || eligible[0]?.id || "",
     participants: defaultParts,
     settled: { ...(purchase?.settled || {}) },
@@ -1378,6 +1424,7 @@ function VacPurchaseFormModal({ purchase, vac, members, onSave, onDelete, onClos
       id: f.id, vacationId: vac.id, description: f.description.trim(),
       total: Math.round(Number(f.total) * 100) / 100,
       payerId: f.payerId, participants: f.participants, settled: f.settled,
+      sourceKey: purchase?.sourceKey || prefill?.key || null,
       split: f.split,
       shares: f.split === "custom"
         ? Object.fromEntries(f.participants.map((id) => [id, Math.round((Number(f.shares[id]) || 0) * 100) / 100]))

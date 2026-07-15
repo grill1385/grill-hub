@@ -16,10 +16,16 @@ create table if not exists vacation_purchases (
   settled jsonb not null default '{}'::jsonb,
   split text not null default 'equal',       -- equal | custom
   shares jsonb not null default '{}'::jsonb, -- split=custom: {memberId: valor}
+  source_key text,                            -- ex.: "stay:<id>" / "transport:<id>" quando gerada de um item
   created_at timestamptz not null default now()
 );
 
+-- se a tabela já existia sem a coluna (versão anterior deste script):
+alter table vacation_purchases add column if not exists source_key text;
+
 alter table vacation_purchases enable row level security;
+drop policy if exists "leitura publica" on vacation_purchases;
+drop policy if exists "escrita membros" on vacation_purchases;
 create policy "leitura publica" on vacation_purchases for select using (true);
 create policy "escrita membros" on vacation_purchases for all
   using (is_admin() or is_member()) with check (is_admin() or is_member());
