@@ -100,3 +100,86 @@ export const api = {
     return data.publicUrl;
   },
 };
+
+/* ============================================================
+   Férias do Grill (tabelas: ver supabase/setup-ferias.sql)
+   ============================================================ */
+const toVacation = (r) => ({
+  id: r.id, name: r.name, dateStart: r.date_start, dateEnd: r.date_end,
+  eventId: r.event_id, notes: r.notes || "",
+});
+const fromVacation = (v) => ({
+  id: v.id, name: v.name, date_start: v.dateStart, date_end: v.dateEnd,
+  event_id: v.eventId || null, notes: v.notes || null,
+});
+const toVPlace = (r) => ({
+  id: r.id, vacationId: r.vacation_id, city: r.city, country: r.country,
+  arriveDate: r.arrive_date, departDate: r.depart_date, sort: r.sort ?? 0,
+});
+const fromVPlace = (p) => ({
+  id: p.id, vacation_id: p.vacationId, city: p.city, country: p.country || null,
+  arrive_date: p.arriveDate || null, depart_date: p.departDate || null, sort: p.sort ?? 0,
+});
+const toVStay = (r) => ({
+  id: r.id, vacationId: r.vacation_id, placeId: r.place_id, name: r.name,
+  checkIn: r.check_in, checkInTime: r.check_in_time, checkOut: r.check_out, checkOutTime: r.check_out_time,
+  priceNightPerson: r.price_night_person == null ? null : Number(r.price_night_person),
+  priceTotal: r.price_total == null ? null : Number(r.price_total),
+  links: r.links || [], status: r.status || "Por pesquisar",
+});
+const fromVStay = (s) => ({
+  id: s.id, vacation_id: s.vacationId, place_id: s.placeId, name: s.name || null,
+  check_in: s.checkIn || null, check_in_time: s.checkInTime || null,
+  check_out: s.checkOut || null, check_out_time: s.checkOutTime || null,
+  price_night_person: s.priceNightPerson ?? null, price_total: s.priceTotal ?? null,
+  links: s.links || [], status: s.status || "Por pesquisar",
+});
+const toVTransport = (r) => ({
+  id: r.id, vacationId: r.vacation_id, fromPlaceId: r.from_place_id, toPlaceId: r.to_place_id,
+  date: r.date, time: r.time, kind: r.kind,
+  pricePerson: r.price_person == null ? null : Number(r.price_person),
+  links: r.links || [], status: r.status || "Por pesquisar",
+});
+const fromVTransport = (t) => ({
+  id: t.id, vacation_id: t.vacationId, from_place_id: t.fromPlaceId || null, to_place_id: t.toPlaceId || null,
+  date: t.date || null, time: t.time || null, kind: t.kind || null,
+  price_person: t.pricePerson ?? null, links: t.links || [], status: t.status || "Por pesquisar",
+});
+const toVTask = (r) => ({
+  id: r.id, vacationId: r.vacation_id, autoKey: r.auto_key, title: r.title,
+  assignees: r.assignees || [], dueDate: r.due_date, done: !!r.done,
+});
+const fromVTask = (t) => ({
+  id: t.id, vacation_id: t.vacationId, auto_key: t.autoKey || null, title: t.title || null,
+  assignees: t.assignees || [], due_date: t.dueDate || null, done: !!t.done,
+});
+
+export const feriasApi = {
+  async loadAll() {
+    const [vacations, places, stays, transports, tasks] = await Promise.all([
+      supabase.from("vacations").select("*"),
+      supabase.from("vacation_places").select("*"),
+      supabase.from("vacation_stays").select("*"),
+      supabase.from("vacation_transports").select("*"),
+      supabase.from("vacation_tasks").select("*"),
+    ]);
+    for (const r of [vacations, places, stays, transports, tasks]) if (r.error) throw r.error;
+    return {
+      vacations: vacations.data.map(toVacation),
+      places: places.data.map(toVPlace),
+      stays: stays.data.map(toVStay),
+      transports: transports.data.map(toVTransport),
+      tasks: tasks.data.map(toVTask),
+    };
+  },
+  async saveVacation(v) { const { error } = await supabase.from("vacations").upsert(fromVacation(v)); if (error) throw error; },
+  async deleteVacation(id) { const { error } = await supabase.from("vacations").delete().eq("id", id); if (error) throw error; },
+  async savePlace(p) { const { error } = await supabase.from("vacation_places").upsert(fromVPlace(p)); if (error) throw error; },
+  async deletePlace(id) { const { error } = await supabase.from("vacation_places").delete().eq("id", id); if (error) throw error; },
+  async saveStay(s) { const { error } = await supabase.from("vacation_stays").upsert(fromVStay(s)); if (error) throw error; },
+  async deleteStay(id) { const { error } = await supabase.from("vacation_stays").delete().eq("id", id); if (error) throw error; },
+  async saveTransport(t) { const { error } = await supabase.from("vacation_transports").upsert(fromVTransport(t)); if (error) throw error; },
+  async deleteTransport(id) { const { error } = await supabase.from("vacation_transports").delete().eq("id", id); if (error) throw error; },
+  async saveTask(t) { const { error } = await supabase.from("vacation_tasks").upsert(fromVTask(t)); if (error) throw error; },
+  async deleteTask(id) { const { error } = await supabase.from("vacation_tasks").delete().eq("id", id); if (error) throw error; },
+};

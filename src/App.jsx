@@ -8,6 +8,7 @@ import React, { useState, useEffect, useMemo } from "react";
    ============================================================ */
 import { api, supabase } from "./api.js";
 import * as XLSX from "xlsx";
+import FeriasTab from "./Ferias.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -467,6 +468,7 @@ export default function App() {
           {[
             ["home", "Home"],
             ["eventos", "Eventos"],
+            ["ferias", "Férias do Grill"],
             ["scoreboard", "Scoreboard"],
             ["membros", "Membros"],
             ["hierarquia", "Hierarquia"],
@@ -488,6 +490,11 @@ export default function App() {
               onMember={(id) => setModal({ type: "memberDetail", id })}
               onConfirm={toggleConfirmation}
               onGoScoreboard={() => setTab("scoreboard")} />
+          )}
+
+          {tab === "ferias" && (
+            <FeriasTab members={data.members} events={data.events} myMember={myMember}
+              isAdmin={isAdmin} session={session} showToast={showToast} />
           )}
 
           {tab === "eventos" && (
