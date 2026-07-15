@@ -80,6 +80,40 @@ const Icon = {
   ),
 };
 
+/* ---------- Sequências de presença (streaks) ----------
+   A chama aquece à medida que a sequência cresce. */
+function streakTier(n) {
+  if (n >= 10) return "#7FD4FF"; // brasa azul — a mais quente
+  if (n >= 6) return "#FF4D2E";  // vermelho vivo
+  if (n >= 3) return "#FF7A3D";  // laranja quente
+  if (n >= 1) return "#F5B841";  // âmbar aceso
+  return "#5A5048";              // apagado
+}
+
+function StreakFlame({ n, best, showZero = false, size = 15 }) {
+  if (!n && !showZero) return null;
+  const isRecord = n > 0 && n === best && best > 1;
+  const title = n > 0
+    ? `Em chamas: ${n} evento(s) seguido(s)${best && best !== n ? ` · recorde: ${best}` : ""}${isRecord ? " · melhor de sempre!" : ""}`
+    : `Sem sequência ativa${best ? ` · recorde: ${best}` : ""}`;
+  return (
+    <span className={`streak ${n === 0 ? "cold" : ""} ${isRecord ? "record" : ""}`} title={title}>
+      <span className="streak-flame" style={{ color: streakTier(n) }}>{Icon.flame({ width: size, height: size })}</span>
+      <b>{n}</b>
+    </span>
+  );
+}
+
+/* Chama compacta para as tabelas laterais: quente = presença, cinza = falta ("traição"). */
+function SideFlame({ n, cold }) {
+  return (
+    <span className={`streak ${cold ? "ash" : ""}`}>
+      <span className="streak-flame" style={{ color: cold ? "#8A8078" : streakTier(n) }}>{Icon.flame({ width: 14, height: 14 })}</span>
+      <b>{n}</b>
+    </span>
+  );
+}
+
 /* ============================================================ */
 export default function App() {
   const [data, setData] = useState(null); // {admins, members, events, roles}
@@ -153,16 +187,38 @@ export default function App() {
 
   const scoreboard = useMemo(() => {
     if (!data) return [];
-    const concluded = data.events.filter((e) => getStatus(e) === "Concluído");
+    const concluded = data.events
+      .filter((e) => getStatus(e) === "Concluído")
+      .sort((a, b) => (a.dateStart || "").localeCompare(b.dateStart || "")); // cronológico p/ sequências
     return data.members
       .map((mb) => {
         const eligible = concluded.filter((e) => !mb.joinDate || eventEndDate(e) >= mb.joinDate);
         const present = eligible.filter((e) => e.presences?.[mb.id]);
         const pct = eligible.length ? Math.round((present.length / eligible.length) * 100) : 0;
-        return { member: mb, pct, present: present.length, total: eligible.length };
+        // sequências consecutivas: streak = presença atual, bestStreak = recorde, absStreak = faltas seguidas agora.
+        let run = 0, best = 0, arun = 0;
+        eligible.forEach((e) => {
+          if (e.presences?.[mb.id]) { run += 1; if (run > best) best = run; arun = 0; }
+          else { arun += 1; run = 0; }
+        });
+        return { member: mb, pct, present: present.length, total: eligible.length,
+          streak: run, bestStreak: best, absStreak: arun };
       })
       .sort((a, b) => b.pct - a.pct || b.present - a.present || a.member.name.localeCompare(b.member.name));
   }, [data]);
+
+  const hallOfFame = useMemo(
+    () => scoreboard.filter((r) => r.bestStreak > 1)
+      .sort((a, b) => b.bestStreak - a.bestStreak || a.member.name.localeCompare(b.member.name))
+      .slice(0, 6),
+    [scoreboard]
+  );
+  const betrayals = useMemo(
+    () => scoreboard.filter((r) => r.absStreak > 1)
+      .sort((a, b) => b.absStreak - a.absStreak || a.member.name.localeCompare(b.member.name))
+      .slice(0, 6),
+    [scoreboard]
+  );
 
   const sortedEventsAsc = useMemo(
     () => (data ? [...data.events].sort((a, b) => (a.dateStart || "").localeCompare(b.dateStart || "")) : []),
@@ -482,7 +538,7 @@ export default function App() {
         </nav>
 
         {/* ---------- Conteúdo ---------- */}
-        <main className={`content ${tab === "home" ? "wide" : ""}`}>
+        <main className={`content ${tab === "home" ? "wide" : ""} ${tab === "scoreboard" ? "wide-score" : ""}`}>
           {tab === "home" && (
             <HomeTab events={sortedEventsAsc} scoreboard={scoreboard} myMember={myMember}
               purchases={data.purchases} members={data.members}
@@ -577,21 +633,56 @@ export default function App() {
             <section>
               <div className="section-head"><h2>Scoreboard de presenças</h2></div>
               {scoreboard.length === 0 && <p className="empty">Sem membros ainda.</p>}
-              <div className="board">
-                {scoreboard.map((row, i) => (
-                  <button key={row.member.id} className="board-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
-                    <span className={`rank r${i + 1}`}>{i + 1}</span>
-                    <span className="board-name">
-                      {row.member.name}
-                      {row.member.username && <span className="uname">@{row.member.username}</span>}
-                    </span>
-                    <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
-                    <span className="board-pct">{row.pct}%</span>
-                    <span className="board-count">{row.present}/{row.total}</span>
-                  </button>
-                ))}
+              <div className="score-layout">
+                <div>
+                  <div className="board">
+                    {scoreboard.map((row, i) => (
+                      <button key={row.member.id} className="board-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
+                        <span className={`rank r${i + 1}`}>{i + 1}</span>
+                        <span className="board-name">
+                          {row.member.name}
+                          {row.member.username && <span className="uname">@{row.member.username}</span>}
+                        </span>
+                        <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
+                        <StreakFlame n={row.streak} best={row.bestStreak} showZero />
+                        <span className="board-pct">{row.pct}%</span>
+                        <span className="board-count">{row.present}/{row.total}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <p className="hint">Percentagem calculada sobre eventos concluídos desde a data de integração de cada membro (sem data de integração, contam todos).</p>
+                </div>
+
+                <aside className="score-side">
+                  <div className="side-panel">
+                    <h3>🏆 Hall of Fame</h3>
+                    <p className="side-sub">Maiores sequências de presença de sempre</p>
+                    {hallOfFame.length === 0 ? (
+                      <p className="hint" style={{ margin: 0 }}>Ainda sem sequências dignas de fama.</p>
+                    ) : hallOfFame.map((row, i) => (
+                      <button key={row.member.id} className="hof-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
+                        <span className={`hof-rank r${i + 1}`}>{i + 1}</span>
+                        <span className="hof-name">{row.member.name}</span>
+                        <SideFlame n={row.bestStreak} />
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="side-panel">
+                    <h3>🗡️ Maiores Traições</h3>
+                    <p className="side-sub">Faltas seguidas neste momento</p>
+                    {betrayals.length === 0 ? (
+                      <p className="hint" style={{ margin: 0 }}>Ninguém anda a trair a brasa. Por enquanto.</p>
+                    ) : betrayals.map((row, i) => (
+                      <button key={row.member.id} className="hof-row" onClick={() => setModal({ type: "memberDetail", id: row.member.id })}>
+                        <span className="hof-rank">{i + 1}</span>
+                        <span className="hof-name">{row.member.name}</span>
+                        <SideFlame n={row.absStreak} cold />
+                      </button>
+                    ))}
+                  </div>
+                </aside>
               </div>
-              <p className="hint">Percentagem calculada sobre eventos concluídos desde a data de integração de cada membro (sem data de integração, contam todos).</p>
             </section>
           )}
 
@@ -766,6 +857,10 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
     ? events.filter((e) => getStatus(e) !== "Concluído" && !e.confirmations?.[myMember.id])
     : [];
   const top5 = scoreboard.slice(0, 5);
+  const hottest = useMemo(
+    () => scoreboard.filter((r) => r.streak >= 3).sort((a, b) => b.streak - a.streak)[0] || null,
+    [scoreboard]
+  );
 
   function move(d) {
     const nk = Math.min(Math.max(0, k + d), maxOffset);
@@ -855,6 +950,13 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
         </div>
       </div>
 
+      {hottest && (
+        <button className="hot-banner" onClick={() => onMember(hottest.member.id)} title="Ver membro">
+          <StreakFlame n={hottest.streak} best={hottest.bestStreak} size={22} />
+          <span><b>{hottest.member.name}</b> está em chamas — {hottest.streak} eventos seguidos sem falhar!</span>
+        </button>
+      )}
+
       <div className="section-head" style={{ marginTop: 36 }}><h2>Scoreboard — Top 5</h2></div>
       {top5.length === 0 && <p className="empty">Sem membros ainda.</p>}
       <div className="podium">
@@ -870,6 +972,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
             </span>
             <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
             <span className="podium-pct">{row.pct}% <span className="mini-date">({row.present}/{row.total})</span></span>
+            {row.streak > 0 && <StreakFlame n={row.streak} best={row.bestStreak} />}
           </button>
         ))}
       </div>
@@ -1260,6 +1363,8 @@ function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
         <div><span className="klabel">Nascimento</span>{fmtDate(mb.birthDate)}</div>
         <div><span className="klabel">No Grill desde</span>{fmtDate(mb.joinDate)}</div>
         <div><span className="klabel">Presenças</span>{row ? `${row.pct}% (${row.present}/${row.total})` : "—"}</div>
+        <div><span className="klabel">Sequência atual</span>{row?.streak ? <StreakFlame n={row.streak} best={row.bestStreak} /> : "—"}</div>
+        <div><span className="klabel">Melhor sequência</span>{row?.bestStreak ? `${row.bestStreak} seguido(s)` : "—"}</div>
       </div>
       <h4>Eventos em que esteve presente ({attended.length})</h4>
       {attended.length === 0 && <p className="hint">Ainda sem presenças registadas.</p>}
@@ -1721,7 +1826,7 @@ function Style() {
 
       /* Scoreboard */
       .board { display:flex; flex-direction:column; gap:8px; }
-      .board-row { display:grid; grid-template-columns:34px 1fr 2fr 52px 56px; align-items:center; gap:12px;
+      .board-row { display:grid; grid-template-columns:34px 1fr 2fr 42px 52px 56px; align-items:center; gap:12px;
         background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:12px 14px; cursor:pointer; color:var(--text); font:inherit; text-align:left; }
       .board-row:hover { border-color:var(--ember); }
       .rank { font-family:'Bebas Neue','Arial Narrow',sans-serif; font-size:19px; color:var(--muted); text-align:center; }
@@ -1731,6 +1836,32 @@ function Style() {
       .board-bar i { display:block; height:100%; background:linear-gradient(90deg,#E85D1F,var(--ember),var(--gold)); border-radius:6px; box-shadow:0 0 8px rgba(255,122,61,.5); }
       .board-pct { font-weight:700; color:var(--ember); text-align:right; }
       .board-count { color:var(--muted); font-size:12px; text-align:right; }
+      .streak { display:inline-flex; align-items:center; gap:3px; font-size:13px; color:var(--text); justify-self:center; white-space:nowrap; }
+      .streak b { font-weight:700; font-variant-numeric:tabular-nums; }
+      .streak-flame { display:inline-flex; filter:drop-shadow(0 0 5px currentColor); }
+      .streak.cold { opacity:.38; }
+      .streak.cold .streak-flame { filter:none; }
+      .streak.record .streak-flame { animation:flamePulse 1.4s ease-in-out infinite; }
+      @keyframes flamePulse { 0%,100%{ transform:scale(1); } 50%{ transform:scale(1.2); } }
+      .hot-banner { display:flex; align-items:center; gap:12px; width:100%; margin-top:26px; padding:11px 15px; text-align:left;
+        background:linear-gradient(90deg, rgba(255,77,46,.16), rgba(245,184,65,.04)); border:1px solid rgba(255,122,61,.32);
+        border-radius:12px; color:var(--text); font-size:14px; cursor:pointer; transition:border-color .15s, transform .15s; }
+      .hot-banner:hover { border-color:var(--ember); transform:translateY(-1px); }
+      .streak.ash .streak-flame { filter:none; opacity:.9; }
+
+      /* Scoreboard + colunas laterais (Hall of Fame / Traições) */
+      .score-layout { display:grid; grid-template-columns:minmax(0,3fr) minmax(210px,1fr); gap:20px; align-items:start; }
+      .score-side { display:flex; flex-direction:column; gap:16px; position:sticky; top:16px; }
+      .side-panel { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px 15px; }
+      .side-panel h3 { margin:0; font-size:15px; display:flex; align-items:center; gap:6px; }
+      .side-sub { color:var(--muted); font-size:11px; margin:2px 0 10px; }
+      .hof-row { display:flex; align-items:center; gap:9px; width:100%; padding:8px; border:0; border-radius:7px;
+        background:none; color:var(--text); font:inherit; text-align:left; cursor:pointer; transition:background .12s; }
+      .hof-row:hover { background:var(--surface2); }
+      .hof-row:hover .hof-name { color:var(--ember); }
+      .hof-rank { width:16px; flex:none; text-align:center; font-family:'Bebas Neue','Arial Narrow',sans-serif; font-size:16px; color:var(--muted); }
+      .hof-rank.r1 { color:var(--gold); } .hof-rank.r2 { color:#C8C2B8; } .hof-rank.r3 { color:#C68B59; }
+      .hof-name { flex:1; font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 
       /* Membros */
       .member-card { display:flex; align-items:center; gap:12px; cursor:pointer; }
@@ -1819,6 +1950,7 @@ function Style() {
 
       /* Home 2.0 */
       .content.wide { max-width:none; }
+      .content.wide-score { max-width:1240px; margin-inline:auto; }
       .home2 { width:100%; }
       .tl-labels, .tl-row { display:grid; grid-template-columns:1.15fr 3fr 1.15fr; gap:14px; }
       .tl-labels h4 { margin:0 0 10px; }
@@ -1890,8 +2022,10 @@ function Style() {
         .skewer-item.left .skewer-dot, .skewer-item.right .skewer-dot { left:-31px; right:auto; }
         .skewer-item.left .event-top { flex-direction:row; }
         .skewer-item.left .event-meta { justify-content:flex-start; }
-        .board-row { grid-template-columns:28px 1fr 60px; }
+        .board-row { grid-template-columns:28px 1fr 42px 60px; }
         .board-bar, .board-count { display:none; }
+        .score-layout { grid-template-columns:1fr; }
+        .score-side { position:static; }
         .row { flex-direction:column; gap:0; }
         .detail-grid { grid-template-columns:1fr; }
         .home-grid { flex-direction:column; }
