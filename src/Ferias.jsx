@@ -774,10 +774,15 @@ function RouteMap({ places, stays, transports }) {
           `Distância: ${Math.round(seg.km)} km${kind === "Avião" ? ` por estrada (~${Math.round(kmStraight)} km em voo)` : ""}<br/>` +
           `Tempo estimado ${modo}: ~${fmtDur(estH)}`;
 
-        const vis = L.polyline(seg.latlngs, base).addTo(map);
-        /* linha invisível mais larga para facilitar o clique */
-        const hit = L.polyline(seg.latlngs, { color: "#000", opacity: 0.001, weight: 18 }).addTo(map).bindPopup(html);
-        hit.on("click", () => { visLines.forEach((l) => l.setStyle(base)); vis.setStyle(hi); vis.bringToFront(); });
+        /* linha visível não interceta cliques; uma linha invisível mais larga trata da interação */
+        const vis = L.polyline(seg.latlngs, { ...base, interactive: false }).addTo(map);
+        const hit = L.polyline(seg.latlngs, { color: "#000", opacity: 0.001, weight: 20 }).addTo(map);
+        hit.bindPopup(html);
+        hit.on("click", (e) => {
+          visLines.forEach((l) => l.setStyle(base));
+          vis.setStyle(hi);
+          hit.openPopup(e.latlng);
+        });
         hit.on("popupclose", () => vis.setStyle(base));
         visLines.push(vis);
       });
