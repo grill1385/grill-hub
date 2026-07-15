@@ -214,7 +214,13 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
       });
       setModal(null);
       if (label) showToast(`${label} guardado.`);
-    } catch (e) { console.error(e); showToast(`Não foi possível guardar. Tens conta de membro ligada?`); }
+    } catch (e) {
+      console.error(e);
+      const msg = e?.message || "";
+      if (/column|schema/i.test(msg)) showToast("Não foi possível guardar — parece faltar correr uma migração SQL no Supabase (ver supabase/*.sql).");
+      else if (/row-level security|permission|policy/i.test(msg)) showToast("Não foi possível guardar. Tens conta de membro ligada?");
+      else showToast(`Não foi possível guardar.${msg ? ` (${msg})` : ""}`);
+    }
   }
 
   async function remove(kind, id, apiFn, label, cascade) {
