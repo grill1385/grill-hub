@@ -235,7 +235,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
     } catch (e) {
       console.error(e);
       const msg = e?.message || "";
-      if (/column|schema/i.test(msg)) showToast("Não foi possível guardar — parece faltar correr uma migração SQL no Supabase (ver supabase/*.sql).");
+      if (/column|schema/i.test(msg)) showToast(`Não foi possível guardar — migração SQL em falta ou cache do schema desatualizada (no SQL Editor: notify pgrst, reload schema). Detalhe: ${msg}`);
       else if (/row-level security|permission|policy/i.test(msg)) showToast("Não foi possível guardar. Tens conta de membro ligada?");
       else showToast(`Não foi possível guardar.${msg ? ` (${msg})` : ""}`);
     }
