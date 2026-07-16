@@ -11,6 +11,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { mediaApi, api } from "./api.js";
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+/* base './' no Vite → capa servida da raiz do site (public/manga-cover.jpg) */
+const MANGA_COVER = `${import.meta.env.BASE_URL}manga-cover.jpg`;
 
 function fmtDate(iso) {
   if (!iso) return "";
@@ -24,12 +26,61 @@ function fmtSize(b) {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 const isImage = (m) => (m?.mime || "").startsWith("image/");
+const isPdf = (m) => (m?.mime || "").includes("pdf");
+
+/* ---------- Ícones vetorizados ---------- */
+const MIcon = {
+  folder: (s = 56) => (
+    <svg viewBox="0 0 48 42" width={s} height={s} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M3 9a4 4 0 0 1 4-4h11.2a4 4 0 0 1 2.9 1.2L24 9h17a4 4 0 0 1 4 4v22a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9Z" fill="#E9A23B" />
+      <path d="M3 15h42v20a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V15Z" fill="#F5C168" />
+      <path d="M3 15h42" stroke="#B87A26" strokeWidth="1.2" />
+    </svg>
+  ),
+  doc: (s = 56) => (
+    <svg viewBox="0 0 40 48" width={s} height={s} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M6 4a3 3 0 0 1 3-3h16l11 11v30a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V4Z" fill="#EFE7D6" />
+      <path d="M25 1v8a3 3 0 0 0 3 3h8" fill="#CBB98F" />
+      <path d="M13 21h14M13 28h14M13 35h9" stroke="#E85D1F" strokeWidth="2.2" strokeLinecap="round" />
+    </svg>
+  ),
+  pdf: (s = 56) => (
+    <svg viewBox="0 0 40 48" width={s} height={s} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M6 4a3 3 0 0 1 3-3h16l11 11v30a3 3 0 0 1-3 3H9a3 3 0 0 1-3-3V4Z" fill="#EFE7D6" />
+      <path d="M25 1v8a3 3 0 0 0 3 3h8" fill="#CBB98F" />
+      <rect x="4" y="26" width="32" height="13" rx="2.5" fill="#C0392B" />
+      <text x="20" y="35.5" textAnchor="middle" fontFamily="Arial, sans-serif" fontSize="8.5" fontWeight="700" fill="#fff">PDF</text>
+    </svg>
+  ),
+  photo: (s = 56) => (
+    <svg viewBox="0 0 48 42" width={s} height={s} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect x="3" y="5" width="42" height="32" rx="4" fill="#2A211B" stroke="#F5C168" strokeWidth="2" />
+      <circle cx="15" cy="16" r="4" fill="#F5C168" />
+      <path d="M6 34l11-12 8 8 6-6 11 12v0a3 3 0 0 1-3 1H8a3 3 0 0 1-2-3Z" fill="#E85D1F" />
+    </svg>
+  ),
+  book: (s = 56) => (
+    <svg viewBox="0 0 48 44" width={s} height={s} fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M24 8C19 4 11 3 5 4v31c6-1 14 0 19 4 5-4 13-5 19-4V4c-6-1-14 0-19 4Z" fill="#EFE7D6" />
+      <path d="M24 8v31" stroke="#B87A26" strokeWidth="2" />
+      <path d="M24 8C19 4 11 3 5 4v31c6-1 14 0 19 4V8Z" fill="#8E2B22" />
+      <path d="M10 13c3-.6 6-.6 9 .4M10 20c3-.6 6-.6 9 .4" stroke="#EFE7D6" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ),
+};
 
 const SECTIONS = {
-  documentos: { label: "Documentos", emoji: "📄", adminOnly: true, accept: "", blurb: "Documentos do grupo — atas, regras, listas, o que precisares." },
-  manga: { label: "Mangá da Lore do Grill", emoji: "📖", adminOnly: true, accept: "image/*,application/pdf", blurb: "As edições semanais do mangá da lore do Grill." },
-  fotos: { label: "Fotos", emoji: "📸", adminOnly: false, accept: "image/*", blurb: "As fotos do grupo. Qualquer membro pode adicionar fotos e pastas." },
+  documentos: { label: "Documentos", icon: "doc", adminOnly: true, accept: "", blurb: "Documentos do grupo — atas, regras, listas, o que precisares." },
+  manga: { label: "Mangá da Lore do Grill", icon: "book", adminOnly: true, accept: "image/*,application/pdf", blurb: "As edições semanais do mangá da lore do Grill." },
+  fotos: { label: "Fotos", icon: "photo", adminOnly: false, accept: "image/*", blurb: "As fotos do grupo. Qualquer membro pode adicionar fotos e pastas." },
 };
+
+/* imagem com fallback para ícone (capa do mangá pode ainda não existir) */
+function ImgOrIcon({ src, alt, fallback }) {
+  const [err, setErr] = useState(false);
+  if (err || !src) return fallback;
+  return <img src={src} alt={alt} loading="lazy" onError={() => setErr(true)} />;
+}
 
 export default function MediaTab({ myMember, isAdmin, session, showToast }) {
   const [entries, setEntries] = useState(null);
@@ -121,6 +172,14 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
     return `Não foi possível guardar.${m ? ` (${m})` : ""}`;
   }
 
+  /* thumbnail de um ficheiro conforme a secção/tipo */
+  function fileThumb(f) {
+    if (isImage(f)) return <img src={f.url} alt={f.title} loading="lazy" />;
+    if (section === "manga") return <ImgOrIcon src={MANGA_COVER} alt={f.title} fallback={MIcon.book(52)} />;
+    if (isPdf(f)) return MIcon.pdf(52);
+    return MIcon.doc(52);
+  }
+
   /* ----- estados de carregamento ----- */
   if (loadErr) return (
     <section>
@@ -143,7 +202,11 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
             const count = entries.filter((e) => e.section === key && e.kind === "file").length;
             return (
               <button key={key} className="media-section-card" onClick={() => { setSection(key); setPath([]); }}>
-                <span className="media-section-emoji">{s.emoji}</span>
+                <span className="media-section-icon">
+                  {key === "manga"
+                    ? <ImgOrIcon src={MANGA_COVER} alt="Mangá da Lore do Grill" fallback={MIcon.book(64)} />
+                    : MIcon[s.icon](64)}
+                </span>
                 <strong>{s.label}</strong>
                 <span className="hint" style={{ margin: 0 }}>{s.blurb}</span>
                 <span className="media-count">{count} ficheiro{count === 1 ? "" : "s"}</span>
@@ -167,7 +230,7 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
       <div className="section-head">
         <h2>
           <a href="#" className="media-back" onClick={(e) => { e.preventDefault(); setSection(null); setPath([]); }}>← Media</a>
-          {" "}{sec.emoji} {sec.label}
+          {" "}{sec.label}
         </h2>
         {writable && (
           <div className="head-actions" style={{ display: "flex", gap: 8 }}>
@@ -203,7 +266,7 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
       <div className="media-grid">
         {folders.map((f) => (
           <div key={f.id} className="media-block folder" onClick={() => setPath([...path, { id: f.id, title: f.title }])}>
-            <div className="media-thumb folder-thumb">📁</div>
+            <div className="media-thumb folder-thumb">{MIcon.folder(58)}</div>
             <div className="media-meta">
               <span className="media-title" title={f.title}>{f.title}</span>
               <span className="media-date">{fmtDate(f.createdAt)}</span>
@@ -219,11 +282,7 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
 
         {files.map((f) => (
           <div key={f.id} className="media-block" onClick={() => setViewer(f)}>
-            <div className="media-thumb">
-              {isImage(f)
-                ? <img src={f.url} alt={f.title} loading="lazy" />
-                : <span className="media-fileicon">{(f.mime || "").includes("pdf") ? "📕" : "📄"}</span>}
-            </div>
+            <div className="media-thumb">{fileThumb(f)}</div>
             <div className="media-meta">
               <span className="media-title" title={f.title}>{f.title}</span>
               <span className="media-date">{fmtDate(f.createdAt)}{f.sizeBytes ? ` · ${fmtSize(f.sizeBytes)}` : ""}{f.uploadedBy ? ` · ${f.uploadedBy}` : ""}</span>
@@ -249,7 +308,7 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
             <div className="media-viewer-body">
               {isImage(viewer)
                 ? <img src={viewer.url} alt={viewer.title} />
-                : (viewer.mime || "").includes("pdf")
+                : isPdf(viewer)
                   ? <iframe title={viewer.title} src={viewer.url} />
                   : <p className="hint">Pré-visualização indisponível para este tipo de ficheiro.</p>}
             </div>
@@ -271,7 +330,8 @@ function MediaStyle() {
       .media-section-card { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; text-align: left;
         padding: 22px 20px; border-radius: 14px; background: var(--surface2); border: 1px solid var(--line); cursor: pointer; color: inherit; transition: transform .12s, border-color .12s; }
       .media-section-card:hover { transform: translateY(-2px); border-color: var(--ember); }
-      .media-section-emoji { font-size: 34px; }
+      .media-section-icon { height: 72px; display: flex; align-items: center; }
+      .media-section-icon img { height: 72px; width: 56px; object-fit: cover; border-radius: 6px; box-shadow: 0 2px 10px rgba(0,0,0,.5); }
       .media-section-card strong { font-size: 17px; }
       .media-count { font-size: 12px; opacity: .7; margin-top: 4px; }
       .media-back { text-decoration: none; opacity: .85; font-size: 15px; margin-right: 4px; color: #F5C168; }
@@ -283,8 +343,7 @@ function MediaStyle() {
       .media-block:hover { transform: translateY(-2px); border-color: var(--ember); }
       .media-thumb { height: 130px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.25); overflow: hidden; }
       .media-thumb img { width: 100%; height: 100%; object-fit: cover; }
-      .media-fileicon { font-size: 46px; }
-      .folder-thumb { font-size: 52px; background: rgba(245,184,104,.08); }
+      .folder-thumb { background: rgba(245,184,104,.06); }
       .media-meta { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
       .media-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       .media-date { font-size: 11.5px; opacity: .65; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
