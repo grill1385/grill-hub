@@ -9,6 +9,7 @@ import React, { useState, useEffect, useMemo } from "react";
 import { api, supabase } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
+import MediaTab from "./Media.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -83,7 +84,8 @@ const Icon = {
 /* ---------- Sequências de presença (streaks) ----------
    A chama aquece à medida que a sequência cresce. */
 function streakTier(n) {
-  if (n >= 10) return "#7FD4FF"; // brasa azul — a mais quente
+  if (n >= 30) return "#E8B4FF"; // violeta rosado — chama lendária (30+)
+  if (n >= 10) return "#7FD4FF"; // brasa azul
   if (n >= 6) return "#FF4D2E";  // vermelho vivo
   if (n >= 3) return "#FF7A3D";  // laranja quente
   if (n >= 1) return "#F5B841";  // âmbar aceso
@@ -527,6 +529,7 @@ export default function App() {
             ["ferias", "Férias do Grill"],
             ["scoreboard", "Scoreboard"],
             ["membros", "Membros"],
+            ["media", "Media"],
             ["hierarquia", "Hierarquia"],
             ...(isAdmin ? [["admin", "Gestão"]] : []),
           ].map(([id, label]) => (
@@ -551,6 +554,10 @@ export default function App() {
           {tab === "ferias" && (
             <FeriasTab members={data.members} events={data.events} myMember={myMember}
               isAdmin={isAdmin} session={session} showToast={showToast} />
+          )}
+
+          {tab === "media" && (
+            <MediaTab myMember={myMember} isAdmin={isAdmin} session={session} showToast={showToast} />
           )}
 
           {tab === "eventos" && (

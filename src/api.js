@@ -217,3 +217,30 @@ export const feriasApi = {
   async deletePurchase(id) { const { error } = await supabase.from("vacation_purchases").delete().eq("id", id); if (error) throw error; },
   async deleteTask(id) { const { error } = await supabase.from("vacation_tasks").delete().eq("id", id); if (error) throw error; },
 };
+
+
+/* ============================================================
+   Media do Grill (tabela: ver supabase/setup-media.sql)
+   Documentos, Mangá da Lore do Grill e Fotos, em árvore de pastas.
+   ============================================================ */
+const toMedia = (r) => ({
+  id: r.id, section: r.section, parentId: r.parent_id, kind: r.kind,
+  title: r.title, url: r.url || null, mime: r.mime || null,
+  sizeBytes: r.size_bytes == null ? null : Number(r.size_bytes),
+  uploadedBy: r.uploaded_by || null, createdAt: r.created_at || null,
+});
+const fromMedia = (m) => ({
+  id: m.id, section: m.section, parent_id: m.parentId || null, kind: m.kind,
+  title: m.title, url: m.url || null, mime: m.mime || null,
+  size_bytes: m.sizeBytes ?? null, uploaded_by: m.uploadedBy || null,
+});
+
+export const mediaApi = {
+  async loadAll() {
+    const { data, error } = await supabase.from("media_entries").select("*");
+    if (error) throw error;
+    return data.map(toMedia);
+  },
+  async save(m) { const { error } = await supabase.from("media_entries").upsert(fromMedia(m)); if (error) throw error; },
+  async remove(id) { const { error } = await supabase.from("media_entries").delete().eq("id", id); if (error) throw error; },
+};

@@ -10,10 +10,10 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 ## Stack e arquitetura
 
-- React 18 + Vite, SPA. `src/App.jsx` (~1900 linhas: componente App + todos os modais), `src/Ferias.jsx` (aba Férias), `src/api.js` (todo o acesso ao Supabase), `src/main.jsx`.
+- React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
-- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`.
+- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`.
 - GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos — só a quem ainda não confirmou presença + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
@@ -46,6 +46,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 ## Convenções
 
+- Media (aba, `src/Media.jsx`): 3 secções (documentos, manga, fotos) sobre a tabela `media_entries` (árvore: parent_id, kind folder/file, title, url, mime, size_bytes, uploaded_by, created_at). Ficheiros no bucket `grill` em `media/<section>/<id>.<ext>`. Escrita: documentos e manga só admins; fotos qualquer membro (RLS `escrita media`). Blocos com título e data; pastas aninháveis sem limite; viewer com imagem/PDF (iframe), abrir e descarregar. Pré-requisito: `setup-media.sql` corrido no SQL Editor.
 - Tudo em PT-PT, tom informal (ex.: "Casinha", "A acender a brasa…").
 - IDs: `uid()` aleatório em texto; BD snake_case ↔ app camelCase (converters em api.js).
 - Layout: `.content` ocupa toda a largura (sem max-width); `.cards` é grelha responsiva auto-fill minmax(360px,1fr) — 1 coluna no telemóvel.
