@@ -26,6 +26,7 @@ function fmtSize(b) {
   return `${(b / (1024 * 1024)).toFixed(1)} MB`;
 }
 const isImage = (m) => (m?.mime || "").startsWith("image/");
+const isVideo = (m) => (m?.mime || "").startsWith("video/");
 const isPdf = (m) => (m?.mime || "").includes("pdf");
 
 /* ---------- Ícones vetorizados ---------- */
@@ -72,7 +73,7 @@ const MIcon = {
 const SECTIONS = {
   documentos: { label: "Documentos", icon: "doc", adminOnly: true, accept: "", blurb: "Documentos do grupo — atas, regras, listas, o que precisares." },
   manga: { label: "Mangá da Lore do Grill", icon: "book", adminOnly: true, accept: "image/*,application/pdf", blurb: "As edições semanais do mangá da lore do Grill." },
-  fotos: { label: "Fotos", icon: "photo", adminOnly: false, accept: "image/*", blurb: "As fotos do grupo. Qualquer membro pode adicionar fotos e pastas." },
+  fotos: { label: "Fotos", icon: "photo", adminOnly: false, accept: "image/*,video/*", blurb: "As fotos e vídeos do grupo (ex.: stories). Qualquer membro pode adicionar e criar pastas." },
 };
 
 /* imagem com fallback para ícone (capa do mangá pode ainda não existir) */
@@ -175,6 +176,12 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
   /* thumbnail de um ficheiro conforme a secção/tipo */
   function fileThumb(f) {
     if (isImage(f)) return <img src={f.url} alt={f.title} loading="lazy" />;
+    if (isVideo(f)) return (
+      <>
+        <video className="media-vidthumb" src={`${f.url}#t=0.1`} muted playsInline preload="metadata" />
+        <span className="media-play">▶</span>
+      </>
+    );
     if (section === "manga") return <ImgOrIcon src={MANGA_COVER} alt={f.title} fallback={MIcon.book(52)} />;
     if (isPdf(f)) return MIcon.pdf(52);
     return MIcon.doc(52);
@@ -236,7 +243,7 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
           <div className="head-actions" style={{ display: "flex", gap: 8 }}>
             <button className="btn ghost" onClick={addFolder}>+ Pasta</button>
             <label className="btn ember" style={{ cursor: "pointer", margin: 0 }}>
-              + {section === "fotos" ? "Fotos" : "Ficheiro"}
+              + {section === "fotos" ? "Fotos/vídeos" : "Ficheiro"}
               <input type="file" multiple accept={sec.accept} style={{ display: "none" }}
                 onChange={(e) => { uploadFiles(e.target.files); e.target.value = ""; }} />
             </label>
@@ -308,9 +315,11 @@ export default function MediaTab({ myMember, isAdmin, session, showToast }) {
             <div className="media-viewer-body">
               {isImage(viewer)
                 ? <img src={viewer.url} alt={viewer.title} />
-                : isPdf(viewer)
-                  ? <iframe title={viewer.title} src={viewer.url} />
-                  : <p className="hint">Pré-visualização indisponível para este tipo de ficheiro.</p>}
+                : isVideo(viewer)
+                  ? <video src={viewer.url} controls autoPlay playsInline />
+                  : isPdf(viewer)
+                    ? <iframe title={viewer.title} src={viewer.url} />
+                    : <p className="hint">Pré-visualização indisponível para este tipo de ficheiro.</p>}
             </div>
             <div className="actions" style={{ padding: "0 4px 4px" }}>
               <a className="btn ghost small" href={viewer.url} target="_blank" rel="noreferrer">Abrir no browser</a>
@@ -342,7 +351,8 @@ function MediaStyle() {
       .media-block { position: relative; border-radius: 12px; background: var(--surface2); border: 1px solid var(--line); overflow: hidden; cursor: pointer; transition: transform .12s, border-color .12s; }
       .media-block:hover { transform: translateY(-2px); border-color: var(--ember); }
       .media-thumb { height: 130px; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,.25); overflow: hidden; }
-      .media-thumb img { width: 100%; height: 100%; object-fit: cover; }
+      .media-thumb img, .media-vidthumb { width: 100%; height: 100%; object-fit: cover; }
+      .media-play { position: absolute; font-size: 20px; color: #fff; background: rgba(0,0,0,.55); width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding-left: 3px; pointer-events: none; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
       .folder-thumb { background: rgba(245,184,104,.06); }
       .media-meta { display: flex; flex-direction: column; gap: 2px; padding: 8px 10px 10px; }
       .media-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -352,7 +362,7 @@ function MediaStyle() {
       .media-actions .iconbtn { background: rgba(0,0,0,.55); border-radius: 6px; }
       .media-viewer { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; width: 100%; max-width: 900px; max-height: 92vh; display: flex; flex-direction: column; padding: 14px 16px; }
       .media-viewer-body { flex: 1; overflow: auto; display: flex; align-items: center; justify-content: center; min-height: 200px; }
-      .media-viewer-body img { max-width: 100%; max-height: 78vh; border-radius: 8px; }
+      .media-viewer-body img, .media-viewer-body video { max-width: 100%; max-height: 78vh; border-radius: 8px; }
       .media-viewer-body iframe { width: 100%; height: 78vh; border: 0; border-radius: 8px; background: #fff; }
       @media (max-width: 760px) {
         .media-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
