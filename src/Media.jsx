@@ -11,8 +11,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { mediaApi, api } from "./api.js";
 
 const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
-/* base './' no Vite → capa servida da raiz do site (public/manga-cover.jpg) */
-const MANGA_COVER = `${import.meta.env.BASE_URL}manga-cover.jpg`;
+/* base './' no Vite → capa servida da raiz do site (public/manga-cover.png) */
+const MANGA_COVER = `${import.meta.env.BASE_URL}manga-cover.png`;
 
 function fmtDate(iso) {
   if (!iso) return "";
