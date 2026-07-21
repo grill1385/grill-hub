@@ -39,7 +39,11 @@ const toPurchase = (r) => ({
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, receipts: r.receipts || [],
   split: r.split || "equal", shares: r.shares || {},
+
+  claimed: r.claimed || {},
 });
+/* claimed fica de fora do fromPurchase de propósito: só muda via RPC
+   claim_my_payment, para o upsert não pisar registos concorrentes. */
 const fromPurchase = (p) => ({
   id: p.id, event_id: p.eventId, description: p.description, total: p.total,
   payer_member_id: p.payerId || null, participants: p.participants || [],
@@ -92,6 +96,11 @@ export const api = {
     if (error) throw error;
   },
   async savePurchase(pu) { const { error } = await supabase.from("purchases").upsert(fromPurchase(pu)); if (error) throw error; },
+  /* devedor marca/desmarca "já paguei" (ver setup-contas-pagamentos.sql) */
+  async claimPayment(purchaseId, value) {
+    const { error } = await supabase.rpc("claim_my_payment", { p_purchase_id: purchaseId, p_value: value });
+    if (error) throw error;
+  },
   async deletePurchase(id) { const { error } = await supabase.from("purchases").delete().eq("id", id); if (error) throw error; },
   async uploadFile(path, file) {
     const { error } = await supabase.storage.from("grill").upload(path, file, { upsert: true });
@@ -156,7 +165,9 @@ const toVPurchase = (r) => ({
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, split: r.split || "equal", shares: r.shares || {},
   sourceKey: r.source_key || null, createdAt: r.created_at || null,
+  claimed: r.claimed || {},
 });
+/* claimed fica de fora do fromVPurchase: só muda via RPC claim_my_vacation_payment */
 /* created_at fica de fora: é definido pela BD no insert e não deve ser pisado */
 const fromVPurchase = (p) => ({
   id: p.id, vacation_id: p.vacationId, description: p.description, total: p.total,
@@ -214,6 +225,10 @@ export const feriasApi = {
   async deleteTransport(id) { const { error } = await supabase.from("vacation_transports").delete().eq("id", id); if (error) throw error; },
   async saveTask(t) { const { error } = await supabase.from("vacation_tasks").upsert(fromVTask(t)); if (error) throw error; },
   async savePurchase(p) { const { error } = await supabase.from("vacation_purchases").upsert(fromVPurchase(p)); if (error) throw error; },
+  async claimPayment(purchaseId, value) {
+    const { error } = await supabase.rpc("claim_my_vacation_payment", { p_purchase_id: purchaseId, p_value: value });
+    if (error) throw error;
+  },
   async deletePurchase(id) { const { error } = await supabase.from("vacation_purchases").delete().eq("id", id); if (error) throw error; },
   async deleteTask(id) { const { error } = await supabase.from("vacation_tasks").delete().eq("id", id); if (error) throw error; },
 };

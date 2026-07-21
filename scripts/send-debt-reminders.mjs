@@ -47,7 +47,7 @@ for (const pu of purchases) {
   const parts = pu.participants || [];
   if (!parts.length) continue;
   for (const mid of parts) {
-    if (mid === pu.payer_member_id || pu.settled?.[mid]) continue;
+    if (mid === pu.payer_member_id || pu.settled?.[mid] || pu.claimed?.[mid]) continue; // claimed: aguarda confirmação do credor, não chatear o devedor
     const share = pu.split === "custom"
       ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
       : Math.round((Number(pu.total) / parts.length) * 100) / 100;
@@ -70,7 +70,7 @@ for (const pu of vacPurchases) {
   const parts = pu.participants || [];
   if (!parts.length) continue;
   for (const mid of parts) {
-    if (mid === pu.payer_member_id || pu.settled?.[mid]) continue;
+    if (mid === pu.payer_member_id || pu.settled?.[mid] || pu.claimed?.[mid]) continue; // claimed: aguarda confirmação do credor, não chatear o devedor
     const share = pu.split === "custom"
       ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
       : Math.round((Number(pu.total) / parts.length) * 100) / 100;

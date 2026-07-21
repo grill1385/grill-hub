@@ -13,13 +13,13 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
-- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`.
+- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`.
 - GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos — só a quem ainda não confirmou presença + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
 
 - `members` (id, name, email, birth_date, join_date, role_id, username, avatar_url) — conta liga-se a membro por email igual.
-- `events` (datas, status "Por planear/Agendado/Concluído", `presences` jsonb, `confirmations` jsonb RSVP), `roles` (label, level), `admins` (email, is_main), `purchases` (contas por evento, split equal/custom, settled, receipts), `profiles` (contas auth pendentes de ligação).
+- `events` (datas, status "Por planear/Agendado/Concluído", `presences` jsonb, `confirmations` jsonb RSVP), `roles` (label, level), `admins` (email, is_main), `purchases` (contas por evento, split equal/custom, settled, claimed, receipts), `profiles` (contas auth pendentes de ligação).
 - Férias (jul 2026): `vacations` (name, date_start/end, event_id opcional, notes, `confirmations` jsonb {memberId: bool}), `vacation_places` (city, country, arrive/depart_date, sort), `vacation_stays` (place_id, check_in/out + horas, price_night_person, price_total, links jsonb, status), `vacation_transports` (from/to_place_id — null = "Casinha" (casa, início/fim), kind, date, time, price_person, links, status; is_general/name/date_end = transporte geral tipo carrinha alugada com período de uso; general_id liga um deslocamento a um geral), `vacation_tasks` (auto_key null = manual; assignees jsonb, due_date, done), `vacation_purchases` (igual a purchases mas com vacation_id e created_at; split equal="Divisão por todos"/custom="Só pago o que usufruo").
 
 ## Aba "Férias do Grill" (src/Ferias.jsx) — regras
@@ -36,12 +36,19 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Contas (sub-aba): compras com pagador obrigatório, participantes = confirmados nas férias, divisão equal/custom (custom valida soma = total); membros criam/editam, só admins alternam saldado e veem o botão de lembrete (mailto). Cada alojamento/transporte (exceto deslocamentos ligados a um geral) gera uma entrada "Por registar" com descrição e total estimado (stay: price_total ou price_night_person×noites×confirmados; transporte: price_person×confirmados) — "Registar compra" abre o formulário pré-preenchido e liga via source_key, evitando duplicados. Lembretes automáticos via send-debt-reminders.mjs: 3 dias após created_at da compra e depois semanalmente (sender grillfeup@gmail.com via Brevo).
 - Escrita: qualquer conta ligada a um membro (canEdit = session && (isAdmin || myMember)).
 
+## Contas — fluxo de pagamento (eventos e férias, jul 2026)
+
+- Qualquer membro cria compras, mas só consigo próprio como credor (payer bloqueado na UI; RLS "membro cria como credor"/"membro edita as suas" em `purchases` exige payer_member_id = my_member_id(); em `vacation_purchases` a política de membros já cobria). O credor edita/elimina as suas compras; admins tudo.
+- Devedor marca "já paguei" → `claimed[mid]=true` via RPCs `claim_my_payment`/`claim_my_vacation_payment` (só participantes, bloqueado se já saldado). `claimed` fica FORA de fromPurchase/fromVPurchase (só muda via RPC, para upserts não pisarem). Pill tracejada dourada "pagou? por confirmar" (.pill.claim).
+- Credor (ou admin) confirma → settled (upsert normal). Devedor com claimed deixa de ser notificado (Home, mailto de lembrete e send-debt-reminders.mjs ignoram claimed); na Home do credor aparece "Pagamentos a confirmar" (secção no painel Contas, botão Confirmar).
+
 ## Estado atual / pendentes
 
 - Aba Férias publicada (commit 2ddb592, jul 2026). Pré-requisito: `setup-ferias.sql` corrido no SQL Editor — confirmar com o David se já foi feito.
 - Confirmações de participação nas férias (jul 2026). Pré-requisito: `setup-ferias-confirmacoes.sql` corrido no SQL Editor — confirmar com o David.
 - Transportes gerais + mapa do roteiro (jul 2026). Pré-requisito: `setup-ferias-transporte-geral.sql` corrido no SQL Editor — confirmar com o David.
 - Contas das férias (jul 2026). Pré-requisito: `setup-ferias-contas.sql` corrido no SQL Editor — confirmar com o David.
+- Fluxo "já paguei"→confirmação + compras por membros (jul 2026). Pré-requisito: `setup-contas-pagamentos.sql` corrido no SQL Editor — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Convenções

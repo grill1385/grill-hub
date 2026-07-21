@@ -295,6 +295,15 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
     } catch (e) { console.error(e); showToast("Não foi possível atualizar o saldado."); }
   }
 
+  async function claimVacPayment(pu, memberId, value) {
+    const next = { ...pu, claimed: { ...(pu.claimed || {}), [memberId]: value } };
+    try {
+      await feriasApi.claimPayment(pu.id, value);
+      setFd((d) => ({ ...d, purchases: d.purchases.map((x) => (x.id === pu.id ? next : x)) }));
+      showToast(value ? "Registado — falta o credor confirmar." : "Registo de pagamento anulado.");
+    } catch (e) { console.error(e); showToast("Não foi possível registar o pagamento."); }
+  }
+
   /* ---------- confirmações de participação ---------- */
   function patchVacation(id, patch) {
     setFd((d) => ({ ...d, vacations: d.vacations.map((v) => (v.id === id ? { ...v, ...patch } : v)) }));
@@ -364,6 +373,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onAddPurchase={(prefill) => setModal({ type: "purchaseForm", prefill })}
           onEditPurchase={(id) => setModal({ type: "purchaseForm", id })}
           onToggleSettled={togglePurchaseSettled}
+          onClaimPayment={claimVacPayment}
           onStayStatus={(s, st) => setItemStatus("stays", s, st, feriasApi.saveStay)}
           onTransportStatus={(t, st) => setItemStatus("transports", t, st, feriasApi.saveTransport)}
           onToggleAssignee={(task, mid) => toggleAssignee(vac, task, mid)}
@@ -408,6 +418,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
       )}
       {modal?.type === "purchaseForm" && vac && (
         <VacPurchaseFormModal purchase={fd.purchases.find((x) => x.id === modal.id)} vac={vac} members={members} prefill={modal.prefill}
+          isAdmin={isAdmin} myMember={myMember}
           onSave={(x) => save("purchases", x, feriasApi.savePurchase, "Compra")}
           onDelete={(id) => remove("purchases", id, feriasApi.deletePurchase, "Compra")}
           onClose={() => setModal(null)} />
@@ -991,7 +1002,7 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 }
 
 /* ---------- Contas ---------- */
-function ContasView({ vac, members, canEdit, isAdmin, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled }) {
+function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment }) {
   /* cada alojamento/transporte com custo gera uma entrada "por registar" (vira compra com 1 clique) */
   const linkedKeys = new Set(purchases.map((x) => x.sourceKey).filter(Boolean));
   const nConf = Object.values(vac.confirmations || {}).filter(Boolean).length;
@@ -1019,7 +1030,7 @@ function ContasView({ vac, members, canEdit, isAdmin, purchases, places, stays, 
   const owing = {};
   purchases.forEach((pu) => {
     (pu.participants || []).forEach((mid) => {
-      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
+      if (mid !== pu.payerId && !pu.settled?.[mid] && !pu.claimed?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
     });
   });
   const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
@@ -1064,28 +1075,38 @@ function ContasView({ vac, members, canEdit, isAdmin, purchases, places, stays, 
         const parts = pu.participants || [];
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
         const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
+        const claimedSum = Math.round(parts.filter((mid) => !isSet(mid) && pu.claimed?.[mid]).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100;
         const payer = members.find((m) => m.id === pu.payerId);
+        const iAmPayer = !!myMember && pu.payerId === myMember.id;
         return (
           <div key={pu.id} className="purchase">
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               {pu.sourceKey && <span className="vac-chip">{pu.sourceKey.startsWith("stay:") ? "alojamento" : "transporte"}</span>}
               <span className="purchase-total">{eur(pu.total)}</span>
-              {canEdit && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
+              {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
             </div>
             <div className="pill-row">
               {parts.map((mid) => {
                 const m = members.find((x) => x.id === mid);
                 if (!m) return null;
                 const done = isSet(mid);
+                const claimed = !done && !!pu.claimed?.[mid];
+                const canConfirm = (isAdmin || iAmPayer) && mid !== pu.payerId;
+                const isMe = !!myMember && mid === myMember.id && mid !== pu.payerId;
+                const onClick = canConfirm
+                  ? () => onToggleSettled(pu, mid)
+                  : isMe && !done ? () => onClaimPayment(pu, mid, !claimed) : undefined;
                 return (
-                  <button key={mid} className={`pill ${done ? "on" : ""}`}
-                    title={mid === pu.payerId ? "Pagou a compra" : isAdmin ? "Alternar saldado (admin)" : ""}
-                    onClick={() => isAdmin && mid !== pu.payerId && onToggleSettled(pu, mid)}>
-                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(shareOf(pu, mid))}`}
+                  <button key={mid} className={`pill ${done ? "on" : claimed ? "claim" : ""}`}
+                    title={mid === pu.payerId ? "Pagou a compra"
+                      : canConfirm ? (claimed ? "Confirmar que recebeste" : "Marcar como saldado")
+                      : isMe && !done ? (claimed ? "Anular o «já paguei»" : "Marcar que já pagaste") : ""}
+                    onClick={onClick}>
+                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : claimed ? " · pagou? por confirmar" : ` · deve ${eur(shareOf(pu, mid))}`}
                   </button>
                 );
               })}
@@ -1393,7 +1414,7 @@ function TransportFormModal({ transport, vac, general, places, transports, showT
   );
 }
 
-function VacPurchaseFormModal({ purchase, vac, members, prefill, onSave, onDelete, onClose }) {
+function VacPurchaseFormModal({ purchase, vac, members, prefill, isAdmin, myMember, onSave, onDelete, onClose }) {
   const editing = !!purchase;
   /* só membros com participação confirmada nas férias (+ quem já constava na compra) */
   const eligible = members.filter((m) => vac.confirmations?.[m.id]
@@ -1403,7 +1424,7 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, onSave, onDelet
     id: purchase?.id || uid(), vacationId: vac.id,
     description: purchase?.description || prefill?.desc || "",
     total: purchase?.total ?? (prefill?.total ?? ""),
-    payerId: purchase?.payerId || eligible[0]?.id || "",
+    payerId: purchase?.payerId || (!isAdmin && myMember ? myMember.id : eligible[0]?.id) || "",
     participants: defaultParts,
     settled: { ...(purchase?.settled || {}) },
     split: purchase?.split || "equal",
@@ -1439,9 +1460,14 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, onSave, onDelet
       <div className="row">
         <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
         <label>Quem pagou (a quem devem)
-          <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
-            {eligible.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          {isAdmin ? (
+            <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
+              {eligible.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          ) : (
+            <input value={members.find((m) => m.id === f.payerId)?.name || "?"} disabled
+              title="Como membro, só podes registar compras que tu próprio pagaste" />
+          )}
         </label>
       </div>
       <label>Divisão

@@ -438,6 +438,15 @@ export default function App() {
     } catch { showToast("Não foi possível atualizar."); }
   }
 
+  async function claimPayment(pu, memberId, value) {
+    const next = { ...pu, claimed: { ...(pu.claimed || {}), [memberId]: value } };
+    try {
+      await api.claimPayment(pu.id, value);
+      setData({ ...data, purchases: data.purchases.map((p) => (p.id === pu.id ? next : p)) });
+      showToast(value ? "Registado — falta o credor confirmar." : "Registo de pagamento anulado.");
+    } catch { showToast("Não foi possível registar o pagamento."); }
+  }
+
   async function importEvents(parsedEvents, newMemberNames) {
     try {
       const nameToId = {};
@@ -548,6 +557,7 @@ export default function App() {
               onOpenEvent={(id) => setModal({ type: "eventDetail", id })}
               onMember={(id) => setModal({ type: "memberDetail", id })}
               onConfirm={toggleConfirmation}
+              onConfirmPayment={(pu, mid) => toggleSettled(pu, mid)}
               onGoScoreboard={() => setTab("scoreboard")} />
           )}
 
@@ -780,6 +790,7 @@ export default function App() {
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
           onToggleSettled={toggleSettled}
+          onClaim={claimPayment}
           onClose={() => setModal(null)} />;
       })()}
 
@@ -810,7 +821,7 @@ export default function App() {
         const ev = data.events.find((e) => e.id === modal.eventId);
         if (!ev) return null;
         const pu = data.purchases.find((p) => p.id === modal.id);
-        return <PurchaseFormModal ev={ev} purchase={pu} members={data.members}
+        return <PurchaseFormModal ev={ev} purchase={pu} members={data.members} isAdmin={isAdmin} myMember={myMember}
           onSave={savePurchase} onDelete={deletePurchase}
           onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
       })()}
@@ -829,13 +840,13 @@ export default function App() {
    Componentes
    ============================================================ */
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, onGoScoreboard }) {
   const myDebts = useMemo(() => {
     if (!myMember) return [];
     const items = [];
     (purchases || []).forEach((pu) => {
       if (!pu.participants?.includes(myMember.id)) return;
-      if (pu.payerId === myMember.id || pu.settled?.[myMember.id]) return;
+      if (pu.payerId === myMember.id || pu.settled?.[myMember.id] || pu.claimed?.[myMember.id]) return;
       const amount = shareOf(pu, myMember.id);
       if (amount <= 0) return;
       const ev = events.find((e) => e.id === pu.eventId);
@@ -843,6 +854,23 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
         id: pu.id, eventId: pu.eventId, eventName: ev?.name || "?",
         desc: pu.description, amount,
         payer: members.find((m) => m.id === pu.payerId)?.name || "?",
+      });
+    });
+    return items;
+  }, [purchases, events, members, myMember]);
+  /* pagamentos que dizem ter-me feito (sou o credor) e faltam confirmar */
+  const toConfirm = useMemo(() => {
+    if (!myMember) return [];
+    const items = [];
+    (purchases || []).forEach((pu) => {
+      if (pu.payerId !== myMember.id) return;
+      (pu.participants || []).forEach((mid) => {
+        if (mid === pu.payerId || pu.settled?.[mid] || !pu.claimed?.[mid]) return;
+        const ev = events.find((e) => e.id === pu.eventId);
+        items.push({
+          pu, mid, eventName: ev?.name || "?", desc: pu.description,
+          amount: shareOf(pu, mid), name: members.find((m) => m.id === mid)?.name || "?",
+        });
       });
     });
     return items;
@@ -941,7 +969,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
-              {myMember && myDebts.length === 0 && <p className="hint">Sem contas por saldar.</p>}
+              {myMember && myDebts.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
               {myMember && myDebts.map((d) => (
                 <div key={d.id} className="todo-item">
                   <button className="todo-name" onClick={() => onOpenEvent(d.eventId)}>{d.eventName}</button>
@@ -949,6 +977,19 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                   <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.payer}</b></span>
                 </div>
               ))}
+              {myMember && toConfirm.length > 0 && (
+                <>
+                  <h4>Pagamentos a confirmar</h4>
+                  {toConfirm.map((c) => (
+                    <div key={`${c.pu.id}-${c.mid}`} className="todo-item">
+                      <button className="todo-name" onClick={() => onOpenEvent(c.pu.eventId)}>{c.eventName}</button>
+                      <span className="mini-date">{c.desc}</span>
+                      <span className="debt-line"><b>{c.name}</b> diz que te pagou <b>{eur(c.amount)}</b></span>
+                      <button className="pill" onClick={() => onConfirmPayment(c.pu, c.mid)}>Confirmar</button>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
             </>
           ) : (
@@ -1155,11 +1196,11 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onToggleSettled, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onToggleSettled, onClaim, onClose }) {
   const owing = {};
   (purchases || []).forEach((pu) => {
     (pu.participants || []).forEach((mid) => {
-      if (mid !== pu.payerId && !pu.settled?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
+      if (mid !== pu.payerId && !pu.settled?.[mid] && !pu.claimed?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
     });
   });
   const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
@@ -1235,27 +1276,37 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
         const parts = pu.participants || [];
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
         const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
+        const claimedSum = Math.round(parts.filter((mid) => !isSet(mid) && pu.claimed?.[mid]).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100;
         const payer = members.find((m) => m.id === pu.payerId);
+        const iAmPayer = !!myMember && pu.payerId === myMember.id;
         return (
           <div key={pu.id} className="purchase">
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               <span className="purchase-total">{eur(pu.total)}</span>
-              {isAdmin && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
+              {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
             </div>
             <div className="pill-row">
               {parts.map((mid) => {
                 const m = members.find((x) => x.id === mid);
                 if (!m) return null;
                 const done = isSet(mid);
+                const claimed = !done && !!pu.claimed?.[mid];
+                const canConfirm = (isAdmin || iAmPayer) && mid !== pu.payerId;
+                const isMe = !!myMember && mid === myMember.id && mid !== pu.payerId;
+                const onClick = canConfirm
+                  ? () => onToggleSettled(pu, mid)
+                  : isMe && !done ? () => onClaim(pu, mid, !claimed) : undefined;
                 return (
-                  <button key={mid} className={`pill ${done ? "on" : ""}`}
-                    title={mid === pu.payerId ? "Pagou a compra" : isAdmin ? "Alternar saldado" : ""}
-                    onClick={() => isAdmin && mid !== pu.payerId && onToggleSettled(pu, mid)}>
-                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : ` · deve ${eur(shareOf(pu, mid))}`}
+                  <button key={mid} className={`pill ${done ? "on" : claimed ? "claim" : ""}`}
+                    title={mid === pu.payerId ? "Pagou a compra"
+                      : canConfirm ? (claimed ? "Confirmar que recebeste" : "Marcar como saldado")
+                      : isMe && !done ? (claimed ? "Anular o «já paguei»" : "Marcar que já pagaste") : ""}
+                    onClick={onClick}>
+                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : claimed ? " · pagou? por confirmar" : ` · deve ${eur(shareOf(pu, mid))}`}
                   </button>
                 );
               })}
@@ -1270,10 +1321,10 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
           </div>
         );
       })}
-      {isAdmin && (
+      {(isAdmin || myMember) && (
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn ghost small" onClick={onAddPurchase}>+ Compra</button>
-          {mailtoHref && <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>}
+          {isAdmin && mailtoHref && <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>}
         </div>
       )}
     </Modal>
@@ -1521,7 +1572,7 @@ function ImportEventsModal({ members, onImport, onClose }) {
   );
 }
 
-function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose }) {
+function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, onDelete, onClose }) {
   const editing = !!purchase;
   const defaultParts = useMemo(() => {
     if (purchase) return purchase.participants;
@@ -1537,7 +1588,7 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
     id: purchase?.id || uid(),
     description: purchase?.description || "",
     total: purchase?.total ?? "",
-    payerId: purchase?.payerId || members[0]?.id || "",
+    payerId: purchase?.payerId || (!isAdmin && myMember ? myMember.id : members[0]?.id) || "",
     participants: defaultParts,
     settled: { ...(purchase?.settled || {}) },
     receipts: [...(purchase?.receipts || [])],
@@ -1583,9 +1634,14 @@ function PurchaseFormModal({ ev, purchase, members, onSave, onDelete, onClose })
       <div className="row">
         <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
         <label>Quem pagou (a quem devem)
-          <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
-            {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
+          {isAdmin ? (
+            <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
+              {members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          ) : (
+            <input value={members.find((m) => m.id === f.payerId)?.name || "?"} disabled
+              title="Como membro, só podes registar compras que tu próprio pagaste" />
+          )}
         </label>
       </div>
       <label>Divisão
@@ -1907,6 +1963,7 @@ function Style() {
       .pill-row { display:flex; flex-wrap:wrap; gap:8px; }
       .pill { background:var(--surface2); border:1px solid var(--line); border-radius:20px; padding:6px 13px; color:var(--muted); cursor:pointer; font:inherit; font-size:13px; }
       .pill.on { background:rgba(255,122,61,.15); border-color:var(--ember); color:var(--ember); font-weight:600; }
+      .pill.claim { border-style:dashed; border-color:var(--gold); color:var(--gold); }
       .pill:hover { border-color:var(--ember); }
 
       .detail-row { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
