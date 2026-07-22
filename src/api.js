@@ -24,12 +24,14 @@ const fromMember = (m) => ({
 });
 const toEvent = (r) => ({
   id: r.id, name: r.name, dateStart: r.date_start, dateEnd: r.date_end,
+  timeStart: r.time_start || "", timeEnd: r.time_end || "",
   description: r.description || "", location: r.location || "",
   locationUrl: r.location_url || "", status: r.status,
   presences: r.presences || {}, confirmations: r.confirmations || {},
 });
 const fromEvent = (e) => ({
   id: e.id, name: e.name, date_start: e.dateStart, date_end: e.dateEnd || null,
+  time_start: e.timeStart || null, time_end: e.timeEnd || null,
   description: e.description || null, location: e.location || null,
   location_url: e.locationUrl || null, status: e.status, presences: e.presences || {},
 });

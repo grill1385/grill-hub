@@ -69,11 +69,30 @@ function eventEndDate(ev) {
   return ev.dateEnd || ev.dateStart;
 }
 
+function nowHM() {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
 function getStatus(ev) {
   if (ev.status === "Concluído") return "Concluído";
-  if (eventEndDate(ev) && eventEndDate(ev) < todayISO()) return "Concluído";
+  const end = eventEndDate(ev);
+  if (end) {
+    const today = todayISO();
+    if (end < today) return "Concluído";
+    if (end === today && ev.timeEnd && nowHM() >= ev.timeEnd) return "Concluído";
+  }
   if (ev.status === "Planeado") return "Agendado"; // compatibilidade com dados antigos
   return ev.status || "Por planear";
+}
+
+/* "12/07/2026" + horas opcionais → "12/07/2026 · 14:00–18:00" */
+function fmtDateRange(ev) {
+  const base = `${fmtDate(ev.dateStart)}${ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}`;
+  const times = ev.timeStart && ev.timeEnd ? `${ev.timeStart}–${ev.timeEnd}`
+    : ev.timeStart ? `a partir das ${ev.timeStart}`
+    : ev.timeEnd ? `até às ${ev.timeEnd}` : "";
+  return times ? `${base} · ${times}` : base;
 }
 
 const STATUS_STYLE = {
@@ -931,7 +950,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
     const st = getStatus(ev); const sty = STATUS_STYLE[st];
     return (
       <div key={ev.id} className={`tl-card fade-${fade} ${big ? "big" : ""}`} onClick={() => onOpenEvent(ev.id)}>
-        <div className="tl-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+        <div className="tl-date">{fmtDateRange(ev)}</div>
         <strong>{ev.name}</strong>
         <div className="tl-meta">
           <span className="status" style={{ background: sty.bg, color: sty.fg }}><i style={{ background: sty.dot }} />{st}</span>
@@ -1117,7 +1136,7 @@ function EventCard({ ev, isAdmin, onOpen, onEdit, compact }) {
         )}
       </div>
       {!compact && (
-        <div className="event-date">{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</div>
+        <div className="event-date">{fmtDateRange(ev)}</div>
       )}
       <div className="event-meta">
         <span className="status" style={{ background: s.bg, color: s.fg }}>
@@ -1246,7 +1265,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
     <Modal title={ev.name} onClose={onClose} wide>
       <div className="detail-row">
         <span className="status" style={{ background: s.bg, color: s.fg }}><i style={{ background: s.dot }} />{st}</span>
-        <span>{fmtDate(ev.dateStart)}{ev.dateEnd ? ` → ${fmtDate(ev.dateEnd)}` : ""}</span>
+        <span>{fmtDateRange(ev)}</span>
         <button className="btn ghost small" onClick={onShare} title="Copiar link de partilha (com pré-visualização no Discord)">Partilhar</button>
         {isAdmin && <button className="btn ghost small" onClick={onEdit}>{Icon.gear({})} Editar</button>}
       </div>
@@ -1378,6 +1397,8 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
     range: !!ev?.dateEnd,
     dateStart: ev?.dateStart || todayISO(),
     dateEnd: ev?.dateEnd || "",
+    timeStart: ev?.timeStart || "",
+    timeEnd: ev?.timeEnd || "",
     description: ev?.description || "",
     location: ev?.location || "",
     locationUrl: ev?.locationUrl || "",
@@ -1395,6 +1416,7 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
     onSave({
       id: f.id, name: f.name.trim(), dateStart: f.dateStart,
       dateEnd: f.range && f.dateEnd ? f.dateEnd : null,
+      timeStart: f.timeStart || null, timeEnd: f.timeEnd || null,
       description: f.description.trim(), location: f.location.trim(),
       locationUrl: f.locationUrl.trim(), status: f.status, presences,
     });
@@ -1410,6 +1432,11 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
         <label>{f.range ? "Início" : "Data"}<input type="date" value={f.dateStart} onChange={(e) => set("dateStart", e.target.value)} /></label>
         {f.range && <label>Fim<input type="date" value={f.dateEnd} onChange={(e) => set("dateEnd", e.target.value)} /></label>}
       </div>
+      <div className="row">
+        <label>Hora de início (opcional)<input type="time" value={f.timeStart} onChange={(e) => set("timeStart", e.target.value)} /></label>
+        <label>Hora de fim (opcional)<input type="time" value={f.timeEnd} onChange={(e) => set("timeEnd", e.target.value)} /></label>
+      </div>
+      <p className="hint" style={{ margin: "0 0 8px" }}>Com hora de fim, o evento passa a “Concluído” automaticamente depois dessa hora no dia final; senão, só no fim do dia.</p>
       <label>Estado
         {isPast ? (
           <input value="Concluído (automático — data já passou)" disabled />
