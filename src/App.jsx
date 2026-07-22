@@ -386,6 +386,24 @@ export default function App() {
     } catch { showToast("Não foi possível eliminar o cargo."); }
   }
 
+  async function saveEventPlace(pl) {
+    try {
+      await api.saveEventPlace(pl);
+      const places = (data.places || []).some((x) => x.id === pl.id)
+        ? data.places.map((x) => (x.id === pl.id ? pl : x))
+        : [...(data.places || []), pl];
+      setData({ ...data, places });
+      showToast("Local guardado.");
+    } catch (e) { console.error(e); showToast(`Não foi possível guardar o local.${/relation|table|schema|column/i.test(e?.message || "") ? " Corre setup-eventos-locais.sql no Supabase." : ""}`); }
+  }
+  async function deleteEventPlace(id) {
+    try {
+      await api.deleteEventPlace(id);
+      setData({ ...data, places: (data.places || []).filter((x) => x.id !== id) });
+      showToast("Local eliminado.");
+    } catch (e) { console.error(e); showToast("Não foi possível eliminar o local."); }
+  }
+
   async function addAdmin(email) {
     const e = email.trim().toLowerCase();
     if (!e.includes("@")) return "Email inválido.";
@@ -832,7 +850,8 @@ export default function App() {
             <AdminPanel admins={data.admins} isMain={isMain} pendingProfiles={pendingProfiles}
               members={data.members} onLink={linkAccount} onDismiss={dismissProfile}
               onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin}
-              events={data.events} onSaveEvent={upsertEvent} showToast={showToast} />
+              events={data.events} onSaveEvent={upsertEvent} showToast={showToast}
+              places={data.places || []} onSavePlace={saveEventPlace} onDeletePlace={deleteEventPlace} />
           )}
         </main>
       </div>
@@ -862,7 +881,7 @@ export default function App() {
       })()}
 
       {modal?.type === "eventForm" && (
-        <EventFormModal ev={data.events.find((e) => e.id === modal.id)} members={data.members}
+        <EventFormModal ev={data.events.find((e) => e.id === modal.id)} members={data.members} places={data.places || []}
           onSave={upsertEvent} onDelete={deleteEvent} onClose={() => setModal(null)} />
       )}
 
@@ -1412,7 +1431,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
   );
 }
 
-function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
+function EventFormModal({ ev, members, places = [], onSave, onDelete, onClose }) {
   const editing = !!ev;
   const [f, setF] = useState(() => ({
     id: ev?.id || uid(),
@@ -1472,6 +1491,17 @@ function EventFormModal({ ev, members, onSave, onDelete, onClose }) {
         )}
       </label>
       <label>Descrição (opcional)<textarea rows={2} value={f.description} onChange={(e) => set("description", e.target.value)} /></label>
+      {places.length > 0 && (
+        <label>Local guardado (opcional)
+          <select value="" onChange={(e) => {
+            const pl = places.find((x) => x.id === e.target.value);
+            if (pl) setF((o) => ({ ...o, location: pl.name, locationUrl: pl.url }));
+          }}>
+            <option value="">— escolher de um local recorrente —</option>
+            {[...places].sort((a, b) => a.name.localeCompare(b.name)).map((pl) => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
+          </select>
+        </label>
+      )}
       <div className="row">
         <label>Localização<input placeholder="ex.: Quinta do Zé, Óbidos" value={f.location} onChange={(e) => set("location", e.target.value)} /></label>
         <label>Link Google Maps (opcional)<input placeholder="https://maps.google.com/…" value={f.locationUrl} onChange={(e) => set("locationUrl", e.target.value)} /></label>
@@ -1831,7 +1861,7 @@ function LinkRow({ profile, members, onLink, onDismiss }) {
   );
 }
 
-function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast }) {
+function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast, places, onSavePlace, onDeletePlace }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   const [sub, setSub] = useState("geral"); // 'geral' | 'eventos'
   const semLocal = (events || []).filter((e) => needsLocation(e)).length;
@@ -1849,7 +1879,7 @@ function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismis
       {sub === "eventos" ? (
         <>
           <p className="hint" style={{ marginTop: 0 }}>Associa localizações aos eventos que ainda não têm — por link do Google Maps ou clicando no mapa. Assim que associas, o evento sai da lista e a bola aparece no mapa (e na vista de Mapa dos Eventos).</p>
-          <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} />
+          <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} places={places || []} onSavePlace={onSavePlace} onDeletePlace={onDeletePlace} />
         </>
       ) : (
       <>

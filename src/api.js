@@ -55,13 +55,14 @@ const fromPurchase = (p) => ({
 
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins, purchases, profiles] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles, places] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
       supabase.from("admins").select("*"),
       supabase.from("purchases").select("*"),
       supabase.from("profiles").select("*"),
+      supabase.from("event_places").select("*"),
     ]);
     for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
@@ -71,6 +72,8 @@ export const api = {
       admins: admins.data,
       purchases: purchases.data.map(toPurchase),
       profiles: profiles.error ? [] : profiles.data,
+      /* tolerante: se setup-eventos-locais.sql ainda não correu, segue sem locais */
+      places: places.error ? [] : places.data.map((r) => ({ id: r.id, name: r.name, url: r.url, createdAt: r.created_at })),
     };
   },
   async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },
@@ -79,6 +82,8 @@ export const api = {
   async deleteMember(id) { const { error } = await supabase.from("members").delete().eq("id", id); if (error) throw error; },
   async saveEvent(e) { const { error } = await supabase.from("events").upsert(fromEvent(e)); if (error) throw error; },
   async deleteEvent(id) { const { error } = await supabase.from("events").delete().eq("id", id); if (error) throw error; },
+  async saveEventPlace(pl) { const { error } = await supabase.from("event_places").upsert({ id: pl.id, name: pl.name, url: pl.url }); if (error) throw error; },
+  async deleteEventPlace(id) { const { error } = await supabase.from("event_places").delete().eq("id", id); if (error) throw error; },
   async saveRole(r) { const { error } = await supabase.from("roles").upsert(r); if (error) throw error; },
   async deleteRole(id) { const { error } = await supabase.from("roles").delete().eq("id", id); if (error) throw error; },
   async addAdmin(email) { const { error } = await supabase.from("admins").insert({ email, is_main: false }); if (error) throw error; },

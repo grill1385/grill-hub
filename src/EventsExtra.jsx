@@ -216,7 +216,7 @@ export function CalendarView({ events, colorOf, onOpen }) {
 /* ============================================================
    GESTÃO DE LOCALIZAÇÕES (Gestão › Gestão de eventos)
    ============================================================ */
-export function EventLocationManager({ events, onSaveEvent, showToast }) {
+export function EventLocationManager({ events, onSaveEvent, showToast, places = [], onSavePlace, onDeletePlace }) {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const markLayer = useRef(null);
@@ -227,6 +227,19 @@ export function EventLocationManager({ events, onSaveEvent, showToast }) {
   const [url, setUrl] = useState("");
   const [pick, setPick] = useState(null); // [lat,lng] escolhido no mapa
   const [busy, setBusy] = useState(false);
+  const [plName, setPlName] = useState("");
+  const [plUrl, setPlUrl] = useState("");
+
+  const uid2 = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
+  function addPlace() {
+    const n = plName.trim(), u = plUrl.trim();
+    if (!n) { showToast("Dá um nome ao local."); return; }
+    if (!/^https?:\/\/.+/.test(u) || !/(google\.[^/]+\/maps|maps\.app\.goo\.gl|goo\.gl\/maps)/.test(u)) {
+      showToast("O local precisa de um link do Google Maps válido."); return;
+    }
+    onSavePlace({ id: uid2(), name: n, url: u });
+    setPlName(""); setPlUrl("");
+  }
 
   const pending = events.filter((e) => needsLocation(e))
     .sort((a, b) => (b.dateStart || "").localeCompare(a.dateStart || ""));
@@ -234,6 +247,10 @@ export function EventLocationManager({ events, onSaveEvent, showToast }) {
 
   function selectEvent(ev) {
     setSelId(ev.id); setName(ev.location || ""); setUrl(ev.locationUrl || ""); setPick(null);
+  }
+  function applyPlace(id) {
+    const pl = places.find((x) => x.id === id);
+    if (pl) { setName(pl.name); setUrl(pl.url); setPick(null); }
   }
 
   /* mapa */
@@ -313,8 +330,16 @@ export function EventLocationManager({ events, onSaveEvent, showToast }) {
           {selId ? (
             <div className="evmgr-form">
               <p className="hint" style={{ marginTop: 0 }}>
-                A associar: <b>{events.find((e) => e.id === selId)?.name}</b> — clica no mapa para marcar, cola um link do Google Maps, ou escreve o nome do local.
+                A associar: <b>{events.find((e) => e.id === selId)?.name}</b> — escolhe um local guardado, clica no mapa, cola um link do Google Maps, ou escreve o nome.
               </p>
+              {places.length > 0 && (
+                <label>Local guardado
+                  <select value="" onChange={(e) => applyPlace(e.target.value)}>
+                    <option value="">— escolher de um local recorrente —</option>
+                    {[...places].sort((a, b) => a.name.localeCompare(b.name)).map((pl) => <option key={pl.id} value={pl.id}>{pl.name}</option>)}
+                  </select>
+                </label>
+              )}
               <div className="row">
                 <label>Nome do local<input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex.: Casa do Pedro, Óbidos" /></label>
                 <label>Link Google Maps<input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://maps.google.com/…" /></label>
@@ -330,6 +355,26 @@ export function EventLocationManager({ events, onSaveEvent, showToast }) {
           ) : (
             <p className="hint">Escolhe um evento à esquerda para lhe associar uma localização.</p>
           )}
+        </div>
+      </div>
+
+      <div className="evmgr-places">
+        <h4>Locais recorrentes ({places.length})</h4>
+        <p className="hint" style={{ marginTop: 0 }}>Locais onde os eventos acontecem com frequência. Link do Google Maps obrigatório. Ficam disponíveis para associar aqui e para qualquer membro escolher ao criar um evento.</p>
+        <div className="row">
+          <label>Nome<input value={plName} onChange={(e) => setPlName(e.target.value)} placeholder="ex.: Casa do Pedro" /></label>
+          <label>Link Google Maps<input value={plUrl} onChange={(e) => setPlUrl(e.target.value)} placeholder="https://maps.google.com/…" /></label>
+        </div>
+        <div className="actions"><button className="btn ember" onClick={addPlace}>+ Local</button></div>
+        <div className="mini-list">
+          {[...places].sort((a, b) => a.name.localeCompare(b.name)).map((pl) => (
+            <div key={pl.id} className="mini-item static">
+              <span><b>{pl.name}</b> — <a href={pl.url} target="_blank" rel="noreferrer">mapa ↗</a></span>
+              <span className="row-actions">
+                <button className="btn danger small" onClick={() => { if (window.confirm(`Eliminar o local "${pl.name}"?`)) onDeletePlace(pl.id); }}>Remover</button>
+              </span>
+            </div>
+          ))}
         </div>
       </div>
     </div>
@@ -372,6 +417,7 @@ function EventsExtraStyle() {
       .evmgr-row.on { border-color: var(--ember); }
       .evmgr-name { font-weight: 600; }
       .evmgr-form { margin-top: 10px; }
+      .evmgr-places { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
       @media (max-width: 760px) {
         .evmgr { grid-template-columns: 1fr; }
         .cal-cell { min-height: 72px; }
