@@ -10,6 +10,7 @@ import { api, supabase } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
+import { CalendarView, EventsMap, EventLocationManager, needsLocation } from "./EventsExtra.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -635,6 +636,8 @@ export default function App() {
                   <div className="segmented">
                     <button className={eventView === "lista" ? "on" : ""} onClick={() => setEventView("lista")}>Lista</button>
                     <button className={eventView === "timeline" ? "on" : ""} onClick={() => setEventView("timeline")}>Friso temporal</button>
+                    <button className={eventView === "calendario" ? "on" : ""} onClick={() => setEventView("calendario")}>Calendário</button>
+                    <button className={eventView === "mapa" ? "on" : ""} onClick={() => setEventView("mapa")}>Mapa</button>
                   </div>
                   {isAdmin && <button className="btn ghost" onClick={() => setModal({ type: "importEvents" })}>Importar Excel</button>}
                   {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "eventForm" })}>+ Evento</button>}
@@ -679,7 +682,13 @@ export default function App() {
                 <p className="empty">Nenhum evento corresponde aos filtros.</p>
               )}
 
-              {eventView === "lista" ? (
+              {eventView === "calendario" ? (
+                <CalendarView events={visibleEvents} colorOf={(ev) => STATUS_STYLE[getStatus(ev)].dot}
+                  onOpen={(id) => setModal({ type: "eventDetail", id })} />
+              ) : eventView === "mapa" ? (
+                <EventsMap events={visibleEvents} colorOf={(ev) => STATUS_STYLE[getStatus(ev)].dot}
+                  onOpen={(id) => setModal({ type: "eventDetail", id })} />
+              ) : eventView === "lista" ? (
                 <div className="cards">
                   {visibleEvents.map((ev) => (
                     <EventCard key={ev.id} ev={ev} isAdmin={isAdmin}
@@ -822,7 +831,8 @@ export default function App() {
           {tab === "admin" && isAdmin && (
             <AdminPanel admins={data.admins} isMain={isMain} pendingProfiles={pendingProfiles}
               members={data.members} onLink={linkAccount} onDismiss={dismissProfile}
-              onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin} />
+              onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin}
+              events={data.events} onSaveEvent={upsertEvent} showToast={showToast} />
           )}
         </main>
       </div>
@@ -1821,12 +1831,28 @@ function LinkRow({ profile, members, onLink, onDismiss }) {
   );
 }
 
-function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin }) {
+function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
+  const [sub, setSub] = useState("geral"); // 'geral' | 'eventos'
+  const semLocal = (events || []).filter((e) => needsLocation(e)).length;
   return (
     <section>
       <div className="section-head"><h2>Gestão</h2></div>
 
+      <div className="segmented" style={{ marginBottom: 18 }}>
+        <button className={sub === "geral" ? "on" : ""} onClick={() => setSub("geral")}>Contas &amp; Admins</button>
+        <button className={sub === "eventos" ? "on" : ""} onClick={() => setSub("eventos")}>
+          Gestão de eventos{semLocal > 0 ? ` (${semLocal})` : ""}
+        </button>
+      </div>
+
+      {sub === "eventos" ? (
+        <>
+          <p className="hint" style={{ marginTop: 0 }}>Associa localizações aos eventos que ainda não têm — por link do Google Maps ou clicando no mapa. Assim que associas, o evento sai da lista e a bola aparece no mapa (e na vista de Mapa dos Eventos).</p>
+          <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} />
+        </>
+      ) : (
+      <>
       <h4>Contas por associar ({pendingProfiles.length})</h4>
       {pendingProfiles.length === 0 && <p className="hint">Nenhuma conta nova por associar.</p>}
       {pendingProfiles.length > 0 && members.filter((m) => !m.email).length === 0 && (
@@ -1868,6 +1894,8 @@ function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismis
         ))}
       </div>
       <p className="hint">As contas são geridas pelo Supabase Auth — qualquer pessoa pode criar conta, mas só os emails desta lista têm permissões de gestão.</p>
+      </>
+      )}
     </section>
   );
 }
