@@ -311,7 +311,13 @@ export default function App() {
       setData({ ...data, events });
       setModal(null);
       showToast("Evento guardado.");
-    } catch { showToast("Não foi possível guardar o evento."); }
+    } catch (e) {
+      console.error(e);
+      const m = e?.message || "";
+      if (/time_start|time_end|column|schema/i.test(m))
+        showToast(`Faltam as colunas de hora no Supabase (corre setup-eventos-horas.sql e "notify pgrst, reload schema"). Detalhe: ${m}`);
+      else showToast(`Não foi possível guardar o evento.${m ? ` (${m})` : ""}`);
+    }
   }
 
   async function deleteEvent(id) {
