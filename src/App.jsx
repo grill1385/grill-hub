@@ -1269,6 +1269,13 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
         <button className="btn ghost small" onClick={onShare} title="Copiar link de partilha (com pré-visualização no Discord)">Partilhar</button>
         {isAdmin && <button className="btn ghost small" onClick={onEdit}>{Icon.gear({})} Editar</button>}
       </div>
+      {(ev.timeStart || ev.timeEnd) && (
+        <p className="loc-line">🕐{" "}
+          {ev.timeStart && ev.timeEnd ? `Das ${ev.timeStart} às ${ev.timeEnd}`
+            : ev.timeStart ? `A partir das ${ev.timeStart}`
+            : `Até às ${ev.timeEnd}`}
+        </p>
+      )}
       {ev.description && <p className="desc">{ev.description}</p>}
       {(ev.location || href) && (
         <p className="loc-line">{Icon.pin({})} {ev.location || "Localização"}{" "}
