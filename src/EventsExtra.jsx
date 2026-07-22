@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
+import { api } from "./api.js";
 
 /* ============================================================
    Extras dos Eventos: geocoding partilhado, vista de calendário,
@@ -293,8 +294,9 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
     const ev = events.find((e) => e.id === selId);
     if (!ev) return;
     let ll = pick || extractLatLng(url);
+    if (!ll && url && /google\.[^/]+\/maps|maps\.app\.goo\.gl|goo\.gl\/maps/.test(url)) ll = await api.resolveMaps(url);
     if (!ll && name.trim()) ll = await geocodeText(name.trim());
-    if (!ll) { showToast("Sem localização — clica no mapa, cola um link do Google Maps com coordenadas, ou escreve um local reconhecível."); return; }
+    if (!ll) { showToast("Sem localização — clica no mapa, cola um link do Google Maps, ou escreve um local reconhecível. (Links curtos precisam da função resolve-maps no Supabase.)"); return; }
     setBusy(true);
     let loc = name.trim();
     if (!loc) loc = (await reverseGeocode(ll[0], ll[1])) || `${ll[0].toFixed(4)}, ${ll[1].toFixed(4)}`;

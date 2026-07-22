@@ -84,6 +84,14 @@ export const api = {
   async deleteEvent(id) { const { error } = await supabase.from("events").delete().eq("id", id); if (error) throw error; },
   async saveEventPlace(pl) { const { error } = await supabase.from("event_places").upsert({ id: pl.id, name: pl.name, url: pl.url }); if (error) throw error; },
   async deleteEventPlace(id) { const { error } = await supabase.from("event_places").delete().eq("id", id); if (error) throw error; },
+  /* expande um link curto do Google Maps (maps.app.goo.gl) para obter coords — via Edge Function resolve-maps */
+  async resolveMaps(url) {
+    try {
+      const { data, error } = await supabase.functions.invoke("resolve-maps", { body: { url } });
+      if (error || !data || data.error || data.lat == null) return null;
+      return [Number(data.lat), Number(data.lng)];
+    } catch { return null; }
+  },
   async saveRole(r) { const { error } = await supabase.from("roles").upsert(r); if (error) throw error; },
   async deleteRole(id) { const { error } = await supabase.from("roles").delete().eq("id", id); if (error) throw error; },
   async addAdmin(email) { const { error } = await supabase.from("admins").insert({ email, is_main: false }); if (error) throw error; },

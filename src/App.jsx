@@ -10,7 +10,7 @@ import { api, supabase } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
-import { CalendarView, EventsMap, EventLocationManager, needsLocation } from "./EventsExtra.jsx";
+import { CalendarView, EventsMap, EventLocationManager, needsLocation, extractLatLng } from "./EventsExtra.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -388,6 +388,11 @@ export default function App() {
 
   async function saveEventPlace(pl) {
     try {
+      // links curtos do Maps não têm coords — expande-os para gravar já com coordenadas
+      if (pl.url && !extractLatLng(pl.url)) {
+        const ll = await api.resolveMaps(pl.url);
+        if (ll) pl = { ...pl, url: `https://www.google.com/maps/search/?api=1&query=${ll[0]},${ll[1]}` };
+      }
       await api.saveEventPlace(pl);
       const places = (data.places || []).some((x) => x.id === pl.id)
         ? data.places.map((x) => (x.id === pl.id ? pl : x))
