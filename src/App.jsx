@@ -33,6 +33,38 @@ const shareOf = (pu, mid) =>
     ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
     : (pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0);
 
+/* Compensação de dívidas por pares (líquido).
+   Considera só dívidas ainda por saldar e não reclamadas ("já paguei").
+   Se A deve a B e B deve a A, fica só a diferença, na direção certa —
+   quem, no líquido, passa a receber é considerado saldado.
+   Não reencaminha dívidas por terceiros (mantém-se a pagar a quem pagou). */
+function pairwiseNet(purchases) {
+  const owe = {}; // owe[devedor][credor] = valor
+  (purchases || []).forEach((pu) => {
+    const payer = pu.payerId;
+    if (!payer) return;
+    (pu.participants || []).forEach((mid) => {
+      if (mid === payer) return;
+      if (pu.settled?.[mid] || pu.claimed?.[mid]) return;
+      const a = shareOf(pu, mid);
+      if (a <= 0) return;
+      owe[mid] = owe[mid] || {};
+      owe[mid][payer] = (owe[mid][payer] || 0) + a;
+    });
+  });
+  const ids = [...new Set([...Object.keys(owe), ...Object.values(owe).flatMap((o) => Object.keys(o))])];
+  const out = []; // {from, to, amount}
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const x = ids[i], y = ids[j];
+      const net = Math.round(((owe[x]?.[y] || 0) - (owe[y]?.[x] || 0)) * 100) / 100;
+      if (net > 0) out.push({ from: x, to: y, amount: net });
+      else if (net < 0) out.push({ from: y, to: x, amount: -net });
+    }
+  }
+  return out;
+}
+
 function eventEndDate(ev) {
   return ev.dateEnd || ev.dateStart;
 }
@@ -841,23 +873,16 @@ export default function App() {
    ============================================================ */
 
 function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, onGoScoreboard }) {
-  const myDebts = useMemo(() => {
-    if (!myMember) return [];
-    const items = [];
-    (purchases || []).forEach((pu) => {
-      if (!pu.participants?.includes(myMember.id)) return;
-      if (pu.payerId === myMember.id || pu.settled?.[myMember.id] || pu.claimed?.[myMember.id]) return;
-      const amount = shareOf(pu, myMember.id);
-      if (amount <= 0) return;
-      const ev = events.find((e) => e.id === pu.eventId);
-      items.push({
-        id: pu.id, eventId: pu.eventId, eventName: ev?.name || "?",
-        desc: pu.description, amount,
-        payer: members.find((m) => m.id === pu.payerId)?.name || "?",
-      });
-    });
-    return items;
-  }, [purchases, events, members, myMember]);
+  /* net a pagar por credor, já compensado e somado em todos os eventos */
+  const myNet = useMemo(() => {
+    if (!myMember) return { pay: [], total: 0 };
+    const pay = pairwiseNet(purchases)
+      .filter((sm) => sm.from === myMember.id)
+      .map((sm) => ({ to: members.find((m) => m.id === sm.to)?.name || "?", amount: sm.amount }))
+      .sort((a, b) => b.amount - a.amount);
+    const total = Math.round(pay.reduce((acc, x) => acc + x.amount, 0) * 100) / 100;
+    return { pay, total };
+  }, [purchases, members, myMember]);
   /* pagamentos que dizem ter-me feito (sou o credor) e faltam confirmar */
   const toConfirm = useMemo(() => {
     if (!myMember) return [];
@@ -969,14 +994,15 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
-              {myMember && myDebts.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
-              {myMember && myDebts.map((d) => (
-                <div key={d.id} className="todo-item">
-                  <button className="todo-name" onClick={() => onOpenEvent(d.eventId)}>{d.eventName}</button>
-                  <span className="mini-date">{d.desc}</span>
-                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.payer}</b></span>
+              {myMember && myNet.pay.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
+              {myMember && myNet.pay.map((d) => (
+                <div key={d.to} className="todo-item">
+                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.to}</b></span>
                 </div>
               ))}
+              {myMember && myNet.pay.length > 1 && (
+                <p className="hint" style={{ margin: "2px 0 0" }}>Total a pagar (compensado): <b>{eur(myNet.total)}</b></p>
+              )}
               {myMember && toConfirm.length > 0 && (
                 <>
                   <h4>Pagamentos a confirmar</h4>
@@ -1321,6 +1347,19 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
           </div>
         );
       })}
+      {(() => {
+        const settle = pairwiseNet(purchases);
+        if (!settle.length) return null;
+        const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+        return (
+          <p className="hint net-summary">
+            <b>Saldos a acertar</b> (compensado): {settle
+              .sort((a, b) => b.amount - a.amount)
+              .map((sm) => `${nm(sm.from)} → ${nm(sm.to)}: ${eur(sm.amount)}`)
+              .join(" · ")}
+          </p>
+        );
+      })()}
       {(isAdmin || myMember) && (
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn ghost small" onClick={onAddPurchase}>+ Compra</button>
@@ -2073,6 +2112,7 @@ function Style() {
       .btn.ghost.active-filter { border-color:var(--ember); color:var(--ember); }
       .shares-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px 12px; margin-top:10px; }
       .debt-line { font-size:12.5px; color:var(--muted); }
+      .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
       .debt-line b { color:var(--ember); }
 
       @media (max-width: 760px) {
