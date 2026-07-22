@@ -1248,19 +1248,19 @@ function NewPasswordModal({ onClose, onDone }) {
 }
 
 function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onToggleSettled, onClaim, onClose }) {
-  const owing = {};
-  (purchases || []).forEach((pu) => {
-    (pu.participants || []).forEach((mid) => {
-      if (mid !== pu.payerId && !pu.settled?.[mid] && !pu.claimed?.[mid]) owing[mid] = (owing[mid] || 0) + shareOf(pu, mid);
-    });
-  });
-  const owingEmails = Object.keys(owing).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
-  const mailtoBody = Object.keys(owing).map((id) => {
-    const m = members.find((x) => x.id === id);
-    return `${m?.name || id}: ${eur(owing[id])} em dívida`;
-  }).join("\n");
+  const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+  /* saldos compensados: por devedor, a quem e quanto deve pagar */
+  const settle = pairwiseNet(purchases);
+  const byDebtor = {}; // debtorId -> [{to, amount}]
+  settle.forEach((sm) => { (byDebtor[sm.from] = byDebtor[sm.from] || []).push({ to: sm.to, amount: sm.amount }); });
+  const owingEmails = Object.keys(byDebtor).map((id) => members.find((m) => m.id === id)?.email).filter(Boolean);
+  const mailtoBody = Object.entries(byDebtor).map(([id, lines]) => {
+    const detalhe = lines.sort((a, b) => b.amount - a.amount)
+      .map((l) => `   - ${eur(l.amount)} a ${nm(l.to)}`).join("\n");
+    return `${nm(id)}:\n${detalhe}`;
+  }).join("\n\n");
   const mailtoHref = owingEmails.length
-    ? `mailto:${owingEmails.join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar: ${ev.name}`)}&body=${encodeURIComponent(`Olá! Há contas por saldar do evento "${ev.name}":\n\n${mailtoBody}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`
+    ? `mailto:${owingEmails.join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar: ${ev.name}`)}&body=${encodeURIComponent(`Olá! Há contas por saldar do evento "${ev.name}" (valores já compensados entre todos):\n\n${mailtoBody}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`
     : null;
   const st = getStatus(ev); const s = STATUS_STYLE[st];
   const present = members.filter((m) => ev.presences?.[m.id]);
