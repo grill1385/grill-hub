@@ -10,7 +10,7 @@ import { api, supabase } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
-import { CalendarView, EventsMap, EventLocationManager, needsLocation, extractLatLng } from "./EventsExtra.jsx";
+import { CalendarView, EventsMap, EventLocationManager, EventSearch, needsLocation, extractLatLng } from "./EventsExtra.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -668,6 +668,8 @@ export default function App() {
               </div>
 
               <div className="filter-bar">
+                <EventSearch events={data.events} colorOf={(ev) => STATUS_STYLE[getStatus(ev)].dot}
+                  onOpen={(id) => setModal({ type: "eventDetail", id })} />
                 <div className="segmented">
                   <button className={eventSort === "desc" ? "on" : ""} onClick={() => setEventSort("desc")}>Recentes primeiro</button>
                   <button className={eventSort === "asc" ? "on" : ""} onClick={() => setEventSort("asc")}>Antigos primeiro</button>
@@ -856,7 +858,8 @@ export default function App() {
               members={data.members} onLink={linkAccount} onDismiss={dismissProfile}
               onAddAdmin={addAdmin} onRemoveAdmin={removeAdmin}
               events={data.events} onSaveEvent={upsertEvent} showToast={showToast}
-              places={data.places || []} onSavePlace={saveEventPlace} onDeletePlace={deleteEventPlace} />
+              places={data.places || []} onSavePlace={saveEventPlace} onDeletePlace={deleteEventPlace}
+              onEditEvent={(id) => setModal({ type: "eventForm", id })} />
           )}
         </main>
       </div>
@@ -1866,7 +1869,7 @@ function LinkRow({ profile, members, onLink, onDismiss }) {
   );
 }
 
-function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast, places, onSavePlace, onDeletePlace }) {
+function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast, places, onSavePlace, onDeletePlace, onEditEvent }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   const [sub, setSub] = useState("geral"); // 'geral' | 'eventos'
   const semLocal = (events || []).filter((e) => needsLocation(e)).length;
@@ -1884,7 +1887,7 @@ function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismis
       {sub === "eventos" ? (
         <>
           <p className="hint" style={{ marginTop: 0 }}>Associa localizações aos eventos que ainda não têm — por link do Google Maps ou clicando no mapa. Assim que associas, o evento sai da lista e a bola aparece no mapa (e na vista de Mapa dos Eventos).</p>
-          <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} places={places || []} onSavePlace={onSavePlace} onDeletePlace={onDeletePlace} />
+          <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} places={places || []} onSavePlace={onSavePlace} onDeletePlace={onDeletePlace} onEditEvent={onEditEvent} />
         </>
       ) : (
       <>

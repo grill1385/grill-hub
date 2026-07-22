@@ -76,6 +76,39 @@ const TILE_OPTS = { attribution: '&copy; OpenStreetMap &copy; CARTO', subdomains
 const fmtD = (iso) => { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
 
 /* ============================================================
+   PESQUISA DE EVENTOS (dropdown de pré-visualização)
+   ============================================================ */
+const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+
+export function EventSearch({ events, colorOf, onOpen, placeholder }) {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const matches = q.trim()
+    ? events.filter((e) => norm(e.name).includes(norm(q)))
+        .sort((a, b) => (b.dateStart || "").localeCompare(a.dateStart || "")).slice(0, 14)
+    : [];
+  return (
+    <div className="evsearch">
+      <EventsExtraStyle />
+      <input className="evsearch-input" value={q} placeholder={placeholder || "Procurar evento por nome…"}
+        onChange={(e) => { setQ(e.target.value); setOpen(true); }}
+        onFocus={() => setOpen(true)} onBlur={() => setTimeout(() => setOpen(false), 150)} />
+      {open && q.trim() && (
+        <div className="evsearch-drop">
+          {matches.length ? matches.map((ev) => (
+            <button key={ev.id} className="evsearch-row" onMouseDown={() => { onOpen(ev.id); setOpen(false); }}>
+              {colorOf && <span className="ev-dot" style={{ background: colorOf(ev) }} />}
+              <span className="evsearch-name">{ev.name}</span>
+              <span className="hint" style={{ margin: 0 }}>{fmtD(ev.dateStart)}</span>
+            </button>
+          )) : <p className="hint" style={{ margin: "6px 8px" }}>Sem resultados.</p>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ============================================================
    VISTA DE MAPA
    ============================================================ */
 export function EventsMap({ events, colorOf, onOpen }) {
@@ -217,7 +250,7 @@ export function CalendarView({ events, colorOf, onOpen }) {
 /* ============================================================
    GESTÃO DE LOCALIZAÇÕES (Gestão › Gestão de eventos)
    ============================================================ */
-export function EventLocationManager({ events, onSaveEvent, showToast, places = [], onSavePlace, onDeletePlace }) {
+export function EventLocationManager({ events, onSaveEvent, showToast, places = [], onSavePlace, onDeletePlace, onEditEvent }) {
   const boxRef = useRef(null);
   const mapRef = useRef(null);
   const markLayer = useRef(null);
@@ -280,7 +313,7 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
       const ll = coords[ev.id];
       if (!ll) return;
       const icon = L.divIcon({ className: "", html: `<div class="ev-pin small">•</div>`, iconSize: [18, 18], iconAnchor: [9, 9] });
-      L.marker(ll, { icon }).addTo(layer).bindTooltip(ev.name);
+      L.marker(ll, { icon }).addTo(layer).bindTooltip(ev.name).on("click", () => selectEvent(ev));
     });
     const p = pick || extractLatLng(url);
     if (p) {
@@ -314,6 +347,10 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
   return (
     <div>
       <EventsExtraStyle />
+      <div style={{ marginBottom: 14, maxWidth: 420 }}>
+        <EventSearch events={events} onOpen={(id) => { const ev = events.find((e) => e.id === id); if (ev) selectEvent(ev); }}
+          placeholder="Procurar qualquer evento para editar a localização…" />
+      </div>
       <div className="evmgr">
         <div className="evmgr-list">
           <h4 style={{ marginTop: 0 }}>Por associar ({pending.length})</h4>
@@ -324,7 +361,7 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
               <span className="hint" style={{ margin: 0 }}>{fmtD(ev.dateStart)}</span>
             </button>
           ))}
-          {placed.length > 0 && <p className="hint" style={{ marginTop: 12 }}>{placed.length} evento(s) já com localização (pontos no mapa).</p>}
+          {placed.length > 0 && <p className="hint" style={{ marginTop: 12 }}>{placed.length} evento(s) já com localização (pontos no mapa — clica num ponto ou usa a pesquisa acima para editar).</p>}
         </div>
 
         <div className="evmgr-map-wrap">
@@ -351,7 +388,8 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
               )}
               <div className="actions">
                 <button className="btn ghost" onClick={() => { setSelId(null); setPick(null); }}>Cancelar</button>
-                <button className="btn ember" disabled={busy} onClick={save}>{busy ? "A guardar…" : "Associar localização"}</button>
+                {onEditEvent && <button className="btn ghost" onClick={() => onEditEvent(selId)}>Editar todos os dados</button>}
+                <button className="btn ember" disabled={busy} onClick={save}>{busy ? "A guardar…" : "Guardar localização"}</button>
               </div>
             </div>
           ) : (
@@ -420,6 +458,13 @@ function EventsExtraStyle() {
       .evmgr-name { font-weight: 600; }
       .evmgr-form { margin-top: 10px; }
       .evmgr-places { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
+      .evsearch { position: relative; min-width: 220px; }
+      .evsearch-input { width: 100%; }
+      .evsearch-drop { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; max-height: 320px; overflow: auto;
+        background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.45); padding: 4px; }
+      .evsearch-row { display: flex; align-items: center; gap: 8px; width: 100%; background: none; border: 0; color: inherit; padding: 7px 8px; cursor: pointer; border-radius: 6px; text-align: left; }
+      .evsearch-row:hover { background: rgba(255,122,61,.16); }
+      .evsearch-name { flex: 1; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
       @media (max-width: 760px) {
         .evmgr { grid-template-columns: 1fr; }
         .cal-cell { min-height: 72px; }
