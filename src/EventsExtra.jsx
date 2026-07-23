@@ -263,17 +263,19 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
   const [busy, setBusy] = useState(false);
   const [plName, setPlName] = useState("");
   const [plUrl, setPlUrl] = useState("");
+  const [plEditId, setPlEditId] = useState(null);
 
   const uid2 = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(36);
-  function addPlace() {
+  function savePlace() {
     const n = plName.trim(), u = plUrl.trim();
     if (!n) { showToast("Dá um nome ao local."); return; }
     if (!/^https?:\/\/.+/.test(u) || !/(google\.[^/]+\/maps|maps\.app\.goo\.gl|goo\.gl\/maps)/.test(u)) {
       showToast("O local precisa de um link do Google Maps válido."); return;
     }
-    onSavePlace({ id: uid2(), name: n, url: u });
-    setPlName(""); setPlUrl("");
+    onSavePlace({ id: plEditId || uid2(), name: n, url: u });
+    setPlName(""); setPlUrl(""); setPlEditId(null);
   }
+  function editPlace(pl) { setPlEditId(pl.id); setPlName(pl.name); setPlUrl(pl.url); }
 
   const pending = events.filter((e) => needsLocation(e))
     .sort((a, b) => (b.dateStart || "").localeCompare(a.dateStart || ""));
@@ -405,12 +407,17 @@ export function EventLocationManager({ events, onSaveEvent, showToast, places = 
           <label>Nome<input value={plName} onChange={(e) => setPlName(e.target.value)} placeholder="ex.: Casa do Pedro" /></label>
           <label>Link Google Maps<input value={plUrl} onChange={(e) => setPlUrl(e.target.value)} placeholder="https://maps.google.com/…" /></label>
         </div>
-        <div className="actions"><button className="btn ember" onClick={addPlace}>+ Local</button></div>
+        <div className="actions">
+          {plEditId && <button className="btn ghost" onClick={() => { setPlEditId(null); setPlName(""); setPlUrl(""); }}>Cancelar</button>}
+          <button className="btn ember" onClick={savePlace}>{plEditId ? "Guardar alterações" : "+ Local"}</button>
+        </div>
+        {plEditId && <p className="hint">Ao guardar, os eventos associados a este local passam a usar o novo link/nome automaticamente.</p>}
         <div className="mini-list">
           {[...places].sort((a, b) => a.name.localeCompare(b.name)).map((pl) => (
-            <div key={pl.id} className="mini-item static">
+            <div key={pl.id} className={`mini-item static ${plEditId === pl.id ? "editing" : ""}`}>
               <span><b>{pl.name}</b> — <a href={pl.url} target="_blank" rel="noreferrer">mapa ↗</a></span>
               <span className="row-actions">
+                <button className="btn ghost small" onClick={() => editPlace(pl)}>Editar</button>
                 <button className="btn danger small" onClick={() => { if (window.confirm(`Eliminar o local "${pl.name}"?`)) onDeletePlace(pl.id); }}>Remover</button>
               </span>
             </div>

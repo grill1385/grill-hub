@@ -11,6 +11,7 @@ import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
 import { CalendarView, EventsMap, EventLocationManager, EventSearch, needsLocation, extractLatLng } from "./EventsExtra.jsx";
+import StatsView from "./Stats.jsx";
 
 const SITE_URL = typeof window !== "undefined" ? window.location.origin + window.location.pathname : "";
 
@@ -388,17 +389,29 @@ export default function App() {
 
   async function saveEventPlace(pl) {
     try {
+      const old = (data.places || []).find((x) => x.id === pl.id) || null;
       // links curtos do Maps não têm coords — expande-os para gravar já com coordenadas
       if (pl.url && !extractLatLng(pl.url)) {
         const ll = await api.resolveMaps(pl.url);
         if (ll) pl = { ...pl, url: `https://www.google.com/maps/search/?api=1&query=${ll[0]},${ll[1]}` };
       }
       await api.saveEventPlace(pl);
-      const places = (data.places || []).some((x) => x.id === pl.id)
-        ? data.places.map((x) => (x.id === pl.id ? pl : x))
-        : [...(data.places || []), pl];
-      setData({ ...data, places });
-      showToast("Local guardado.");
+      const places = old ? data.places.map((x) => (x.id === pl.id ? pl : x)) : [...(data.places || []), pl];
+
+      // cascata: eventos associados ao link antigo deste local passam a usar o novo
+      let events = data.events;
+      if (old && (old.url !== pl.url || old.name !== pl.name)) {
+        const affected = data.events.filter((ev) => ev.locationUrl === old.url && (ev.location || "") === (old.name || ""));
+        if (affected.length) {
+          const updated = affected.map((ev) => ({ ...ev, location: pl.name, locationUrl: pl.url }));
+          await Promise.all(updated.map((ev) => api.saveEvent(ev)));
+          const map = Object.fromEntries(updated.map((ev) => [ev.id, ev]));
+          events = data.events.map((ev) => map[ev.id] || ev);
+          showToast(`Local guardado — ${affected.length} evento(s) atualizado(s).`);
+        } else showToast("Local guardado.");
+      } else showToast("Local guardado.");
+
+      setData({ ...data, places, events });
     } catch (e) { console.error(e); showToast(`Não foi possível guardar o local.${/relation|table|schema|column/i.test(e?.message || "") ? " Corre setup-eventos-locais.sql no Supabase." : ""}`); }
   }
   async function deleteEventPlace(id) {
@@ -661,6 +674,7 @@ export default function App() {
                     <button className={eventView === "timeline" ? "on" : ""} onClick={() => setEventView("timeline")}>Friso temporal</button>
                     <button className={eventView === "calendario" ? "on" : ""} onClick={() => setEventView("calendario")}>Calendário</button>
                     <button className={eventView === "mapa" ? "on" : ""} onClick={() => setEventView("mapa")}>Mapa</button>
+                    <button className={eventView === "stats" ? "on" : ""} onClick={() => setEventView("stats")}>Estatísticas</button>
                   </div>
                   {isAdmin && <button className="btn ghost" onClick={() => setModal({ type: "importEvents" })}>Importar Excel</button>}
                   {isAdmin && <button className="btn ember" onClick={() => setModal({ type: "eventForm" })}>+ Evento</button>}
@@ -707,7 +721,9 @@ export default function App() {
                 <p className="empty">Nenhum evento corresponde aos filtros.</p>
               )}
 
-              {eventView === "calendario" ? (
+              {eventView === "stats" ? (
+                <StatsView events={data.events} members={data.members} />
+              ) : eventView === "calendario" ? (
                 <CalendarView events={visibleEvents} colorOf={(ev) => STATUS_STYLE[getStatus(ev)].dot}
                   onOpen={(id) => setModal({ type: "eventDetail", id })} />
               ) : eventView === "mapa" ? (
