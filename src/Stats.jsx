@@ -282,16 +282,6 @@ export default function StatsView({ events, members }) {
 
 
       </div>
-      <div className="co-select">
-        <h4 style={{ margin: 0 }}>Locais &amp; companhias</h4>
-        <div className="co-selrow">
-          <span className="klabel">Companhias de:</span>
-          <select className="co-selbox" value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setOpenMost(null); setOpenLeast(null); }}>
-            <option value="">— escolher membro —</option>
-            {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-        </div>
-      </div>
       <div className="stat-grid" style={{ marginTop: 12 }}>
         <Card title="Evolução dos locais ao longo dos anos" sub="Escolhe os locais a comparar" wide>
           <div className="loc-picker">
@@ -323,12 +313,26 @@ export default function StatsView({ events, members }) {
             </LineChart>
           </ResponsiveContainer>
         </Card>
-        {partnerId
-          ? <CoCard title="Top 5 — mais eventos juntos" rows={mostRows} openId={openMost} setOpenId={setOpenMost} />
-          : <div className="stat-card"><h4>Top 5 — mais eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
-        {partnerId
-          ? <CoCard title="Top 5 — menos eventos juntos" rows={leastRows} openId={openLeast} setOpenId={setOpenLeast} />
-          : <div className="stat-card"><h4>Top 5 — menos eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
+        <div className="co-panel">
+          <div className="co-select">
+            <h4 style={{ margin: 0 }}>Companhias</h4>
+            <div className="co-selrow">
+              <span className="klabel">de:</span>
+              <select className="co-selbox" value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setOpenMost(null); setOpenLeast(null); }}>
+                <option value="">— escolher membro —</option>
+                {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="co-inner">
+            {partnerId
+              ? <CoCard title="Top 5 — mais eventos juntos" rows={mostRows} openId={openMost} setOpenId={setOpenMost} />
+              : <div className="stat-card"><h4>Top 5 — mais eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
+            {partnerId
+              ? <CoCard title="Top 5 — menos eventos juntos" rows={leastRows} openId={openLeast} setOpenId={setOpenLeast} />
+              : <div className="stat-card"><h4>Top 5 — menos eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
+          </div>
+        </div>
       </div>
       {semLocal > 0 && <p className="hint">{semLocal} evento(s) sem localização não entram nos gráficos de locais — associa-os na Gestão › Gestão de eventos.</p>}
     </div>
@@ -348,7 +352,9 @@ function StatsStyle() {
       .loc-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
       .stat-card.wide { grid-column: span 2; }
       .stat-card.fullrow { width: 100%; margin-bottom: 16px; box-sizing: border-box; }
-      .co-select { margin-top: 20px; display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+      .co-panel { grid-column: span 2; display: flex; flex-direction: column; gap: 10px; }
+      .co-inner { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+      .co-select { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
       .co-selrow { display: flex; align-items: center; gap: 8px; }
       .co-selrow .klabel { font-size: 13px; color: var(--muted); }
       .co-selbox { min-width: 240px; background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; color: var(--text); font: inherit; }
@@ -361,7 +367,7 @@ function StatsStyle() {
       .co-caret { color: var(--muted); }
       .co-events { padding: 6px 10px 4px; display: flex; flex-direction: column; gap: 3px; }
       .co-ev { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 2px 0; border-bottom: 1px solid var(--line); }
-      @media (max-width: 720px) { .stat-card.wide { grid-column: span 1; } }
+      @media (max-width: 720px) { .stat-card.wide, .co-panel { grid-column: span 1; } .co-inner { grid-template-columns: 1fr; } }
     `}</style>
   );
 }

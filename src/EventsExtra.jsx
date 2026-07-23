@@ -465,7 +465,7 @@ function EventsExtraStyle() {
       .evmgr-name { font-weight: 600; }
       .evmgr-form { margin-top: 10px; }
       .evmgr-places { margin-top: 22px; padding-top: 16px; border-top: 1px solid var(--line); }
-      .evsearch { position: relative; min-width: 220px; }
+      .evsearch { position: relative; width: 240px; max-width: 100%; flex: 0 0 auto; }
       .evsearch-input { width: 100%; }
       .evsearch-drop { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; right: 0; max-height: 320px; overflow: auto;
         background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.45); padding: 4px; }
