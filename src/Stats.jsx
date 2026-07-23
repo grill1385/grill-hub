@@ -9,14 +9,16 @@ import {
    ============================================================ */
 const MESES = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
 const PALETTE = ["#FF7A3D", "#F5B841", "#7FD4FF", "#9BC98F", "#E8B4FF", "#F09A6A", "#8FD9C9", "#C77DFF"];
+const BIGPAL = ["#FF7A3D", "#F5B841", "#7FD4FF", "#9BC98F", "#E8B4FF", "#F09A6A", "#8FD9C9", "#C77DFF",
+  "#FFD166", "#5FA8D3", "#EF476F", "#06D6A0", "#B5838D", "#FFB4A2", "#A0C4FF", "#BDB2FF", "#CAFFBF", "#FDFFB6"];
 const norm = (t) => String(t || "").trim();
 
 const axis = { stroke: "#3A322A", tick: { fill: "#9C9184", fontSize: 12 } };
 const tooltipStyle = { background: "#211C17", border: "1px solid #3A322A", borderRadius: 8, color: "#F0E9DF" };
 
-function Card({ title, children, sub }) {
+function Card({ title, children, sub, wide }) {
   return (
-    <div className="stat-card">
+    <div className={`stat-card ${wide ? "wide" : ""}`}>
       <h4>{title}</h4>
       {sub && <p className="hint" style={{ marginTop: -4 }}>{sub}</p>}
       {children}
@@ -77,6 +79,27 @@ export default function StatsView({ events, members }) {
       return row;
     });
   }, [anos, activeLocs, evs]);
+
+  /* --- presenças por membro ao longo dos anos --- */
+  const memPresent = useMemo(
+    () => (members || []).filter((m) => evs.some((e) => e.presences?.[m.id])),
+    [members, evs]
+  );
+  const [selMembers, setSelMembers] = useState(null); // null = todos
+  const activeMembers = selMembers || memPresent.map((m) => m.id);
+  const memTotals = useMemo(() => {
+    const t = {};
+    memPresent.forEach((m) => { t[m.id] = evs.filter((e) => e.presences?.[m.id]).length; });
+    return t;
+  }, [memPresent, evs]);
+  const nameOf = (id) => (members.find((m) => m.id === id)?.name || id);
+  const attMemberEvolution = useMemo(() => anos.map((y) => {
+    const row = { ano: y };
+    activeMembers.forEach((id) => {
+      row[nameOf(id)] = evs.filter((e) => e.dateStart.slice(0, 4) === y && e.presences?.[id]).length;
+    });
+    return row;
+  }), [anos, activeMembers, evs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalEventos = evs.length;
   const totalConcluidos = evs.filter((e) => Object.values(e.presences || {}).some(Boolean)).length;
@@ -143,7 +166,7 @@ export default function StatsView({ events, members }) {
           </ResponsiveContainer>
         </Card>
 
-        <Card title="Evolução dos locais ao longo dos anos" sub="Escolhe os locais a comparar">
+        <Card title="Evolução dos locais ao longo dos anos" sub="Escolhe os locais a comparar" wide>
           <div className="loc-picker">
             {locCounts.slice(0, 12).map((x, i) => {
               const on = activeLocs.includes(x.local);
@@ -173,6 +196,35 @@ export default function StatsView({ events, members }) {
             </LineChart>
           </ResponsiveContainer>
         </Card>
+
+        <Card title="Presenças dos membros ao longo do tempo" sub="Eventos em que cada membro esteve presente, por ano" wide>
+          <div className="loc-picker">
+            {[...memPresent].sort((a, b) => (memTotals[b.id] || 0) - (memTotals[a.id] || 0)).map((m) => {
+              const on = activeMembers.includes(m.id);
+              return (
+                <button key={m.id} type="button" className={`pill ${on ? "on" : ""}`}
+                  onClick={() => {
+                    const base = selMembers || memPresent.map((x) => x.id);
+                    setSelMembers(on ? base.filter((x) => x !== m.id) : [...base, m.id]);
+                  }}>
+                  {m.name} ({memTotals[m.id] || 0})
+                </button>
+              );
+            })}
+            {selMembers && <button className="btn ghost small" onClick={() => setSelMembers(null)}>Todos</button>}
+          </div>
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={attMemberEvolution}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#2A241E" />
+              <XAxis dataKey="ano" {...axis} /><YAxis allowDecimals={false} {...axis} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {activeMembers.map((id, i) => (
+                <Line key={id} type="monotone" dataKey={nameOf(id)} stroke={BIGPAL[i % BIGPAL.length]} strokeWidth={2} dot={{ r: 2 }} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
       </div>
       {semLocal > 0 && <p className="hint">{semLocal} evento(s) sem localização não entram nos gráficos de locais — associa-os na Gestão › Gestão de eventos.</p>}
     </div>
@@ -190,6 +242,8 @@ function StatsStyle() {
       .stat-card { background: var(--surface2); border: 1px solid var(--line); border-radius: 12px; padding: 16px 16px 8px; }
       .stat-card h4 { margin: 0 0 8px; }
       .loc-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+      .stat-card.wide { grid-column: span 2; }
+      @media (max-width: 720px) { .stat-card.wide { grid-column: span 1; } }
     `}</style>
   );
 }
