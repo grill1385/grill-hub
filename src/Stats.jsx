@@ -87,6 +87,7 @@ export default function StatsView({ events, members }) {
   );
   const [selMembers, setSelMembers] = useState(null); // null = todos
   const [cumul, setCumul] = useState(false);
+  const [unit, setUnit] = useState("count"); // count | pct
   const activeMembers = selMembers || memPresent.map((m) => m.id);
   const memTotals = useMemo(() => {
     const t = {};
@@ -102,17 +103,28 @@ export default function StatsView({ events, members }) {
   }, [evs]);
   const fmtMes = (k) => { const [y, m] = k.split("-"); return `${MESES[Number(m) - 1]}/${y.slice(2)}`; };
   const attMemberEvolution = useMemo(() => {
-    const running = {};
+    const running = {}; let runEvents = 0;
     return meses.map((k) => {
       const row = { mes: fmtMes(k) };
+      const eventosMes = evs.filter((e) => e.dateStart.slice(0, 7) === k).length;
+      runEvents += eventosMes;
       activeMembers.forEach((id) => {
         const c = evs.filter((e) => e.dateStart.slice(0, 7) === k && e.presences?.[id]).length;
         running[id] = (running[id] || 0) + c;
-        row[nameOf(id)] = cumul ? running[id] : c;
+        let v;
+        if (unit === "pct") {
+          v = cumul
+            ? (runEvents ? (running[id] / runEvents) * 100 : 0)
+            : (eventosMes ? (c / eventosMes) * 100 : 0);
+          v = Math.round(v * 10) / 10;
+        } else {
+          v = cumul ? running[id] : c;
+        }
+        row[nameOf(id)] = v;
       });
       return row;
     });
-  }, [meses, activeMembers, evs, cumul]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [meses, activeMembers, evs, cumul, unit]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalEventos = evs.length;
   const totalConcluidos = evs.filter((e) => Object.values(e.presences || {}).some(Boolean)).length;
@@ -131,10 +143,17 @@ export default function StatsView({ events, members }) {
         <div className="kpi"><span className="kpi-n">{anos.length}</span><span className="kpi-l">Anos ativos</span></div>
       </div>
 
-        <Card title="Presenças dos membros ao longo do tempo" sub={cumul ? "Total acumulado de presenças, mês a mês" : "Presenças de cada membro em cada mês"} wide fullrow>
-          <div className="segmented" style={{ marginBottom: 10 }}>
-            <button className={!cumul ? "on" : ""} onClick={() => setCumul(false)}>Por mês</button>
-            <button className={cumul ? "on" : ""} onClick={() => setCumul(true)}>Cumulativo</button>
+        <Card title="Presenças dos membros ao longo do tempo"
+          sub={`${cumul ? "Acumulado" : "Por mês"} · ${unit === "pct" ? "% dos eventos realizados" : "nº de presenças"}`} wide fullrow>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <div className="segmented">
+              <button className={!cumul ? "on" : ""} onClick={() => setCumul(false)}>Por mês</button>
+              <button className={cumul ? "on" : ""} onClick={() => setCumul(true)}>Cumulativo</button>
+            </div>
+            <div className="segmented">
+              <button className={unit === "count" ? "on" : ""} onClick={() => setUnit("count")}>Nº de eventos</button>
+              <button className={unit === "pct" ? "on" : ""} onClick={() => setUnit("pct")}>% de eventos</button>
+            </div>
           </div>
           <div className="loc-picker">
             {[...memPresent].sort((a, b) => (memTotals[b.id] || 0) - (memTotals[a.id] || 0)).map((m) => {
@@ -154,8 +173,10 @@ export default function StatsView({ events, members }) {
           <ResponsiveContainer width="100%" height={420}>
             <LineChart data={attMemberEvolution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#2A241E" />
-              <XAxis dataKey="mes" {...axis} interval="preserveStartEnd" minTickGap={20} /><YAxis allowDecimals={false} {...axis} />
-              <Tooltip contentStyle={tooltipStyle} />
+              <XAxis dataKey="mes" {...axis} interval="preserveStartEnd" minTickGap={20} />
+              <YAxis {...axis} allowDecimals={unit === "pct"} domain={unit === "pct" ? [0, 100] : [0, "auto"]}
+                tickFormatter={unit === "pct" ? (v) => `${v}%` : undefined} />
+              <Tooltip contentStyle={tooltipStyle} formatter={unit === "pct" ? (v) => `${v}%` : undefined} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               {activeMembers.map((id, i) => (
                 <Line key={id} type="monotone" dataKey={nameOf(id)} stroke={BIGPAL[i % BIGPAL.length]} strokeWidth={2} dot={{ r: 2 }} />
