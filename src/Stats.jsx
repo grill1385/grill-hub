@@ -86,6 +86,7 @@ export default function StatsView({ events, members }) {
     [members, evs]
   );
   const [selMembers, setSelMembers] = useState(null); // null = todos
+  const [cumul, setCumul] = useState(false);
   const activeMembers = selMembers || memPresent.map((m) => m.id);
   const memTotals = useMemo(() => {
     const t = {};
@@ -93,26 +94,25 @@ export default function StatsView({ events, members }) {
     return t;
   }, [memPresent, evs]);
   const nameOf = (id) => (members.find((m) => m.id === id)?.name || id);
+  /* meses com pelo menos uma presença (ignora meses vazios) */
   const meses = useMemo(() => {
-    const keys = evs.map((e) => e.dateStart.slice(0, 7)).sort();
-    if (!keys.length) return [];
-    const out = []; const [y0, m0] = keys[0].split("-").map(Number); const [y1, m1] = keys[keys.length - 1].split("-").map(Number);
-    let y = y0, m = m0;
-    let guard = 0;
-    while ((y < y1 || (y === y1 && m <= m1)) && guard++ < 600) {
-      out.push(`${y}-${String(m).padStart(2, "0")}`);
-      m++; if (m > 12) { m = 1; y++; }
-    }
-    return out;
+    const set = new Set();
+    evs.forEach((e) => { if (Object.values(e.presences || {}).some(Boolean)) set.add(e.dateStart.slice(0, 7)); });
+    return [...set].sort();
   }, [evs]);
   const fmtMes = (k) => { const [y, m] = k.split("-"); return `${MESES[Number(m) - 1]}/${y.slice(2)}`; };
-  const attMemberEvolution = useMemo(() => meses.map((k) => {
-    const row = { mes: fmtMes(k) };
-    activeMembers.forEach((id) => {
-      row[nameOf(id)] = evs.filter((e) => e.dateStart.slice(0, 7) === k && e.presences?.[id]).length;
+  const attMemberEvolution = useMemo(() => {
+    const running = {};
+    return meses.map((k) => {
+      const row = { mes: fmtMes(k) };
+      activeMembers.forEach((id) => {
+        const c = evs.filter((e) => e.dateStart.slice(0, 7) === k && e.presences?.[id]).length;
+        running[id] = (running[id] || 0) + c;
+        row[nameOf(id)] = cumul ? running[id] : c;
+      });
+      return row;
     });
-    return row;
-  }), [meses, activeMembers, evs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [meses, activeMembers, evs, cumul]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalEventos = evs.length;
   const totalConcluidos = evs.filter((e) => Object.values(e.presences || {}).some(Boolean)).length;
@@ -210,7 +210,11 @@ export default function StatsView({ events, members }) {
           </ResponsiveContainer>
         </Card>
 
-        <Card title="Presenças dos membros ao longo do tempo" sub="Eventos em que cada membro esteve presente, por ano" wide>
+        <Card title="Presenças dos membros ao longo do tempo" sub={cumul ? "Total acumulado de presenças, mês a mês" : "Presenças de cada membro em cada mês"} wide>
+          <div className="segmented" style={{ marginBottom: 10 }}>
+            <button className={!cumul ? "on" : ""} onClick={() => setCumul(false)}>Por mês</button>
+            <button className={cumul ? "on" : ""} onClick={() => setCumul(true)}>Cumulativo</button>
+          </div>
           <div className="loc-picker">
             {[...memPresent].sort((a, b) => (memTotals[b.id] || 0) - (memTotals[a.id] || 0)).map((m) => {
               const on = activeMembers.includes(m.id);
