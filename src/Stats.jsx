@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import {
   ResponsiveContainer, BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
-  XAxis, YAxis, Tooltip, Legend, CartesianGrid,
+  XAxis, YAxis, Tooltip, Legend, CartesianGrid, Brush,
 } from "recharts";
 
 /* ============================================================
@@ -16,9 +16,9 @@ const norm = (t) => String(t || "").trim();
 const axis = { stroke: "#3A322A", tick: { fill: "#9C9184", fontSize: 12 } };
 const tooltipStyle = { background: "#211C17", border: "1px solid #3A322A", borderRadius: 8, color: "#F0E9DF" };
 
-function Card({ title, children, sub, wide }) {
+function Card({ title, children, sub, wide, fullrow }) {
   return (
-    <div className={`stat-card ${wide ? "wide" : ""}`}>
+    <div className={`stat-card ${wide ? "wide" : ""} ${fullrow ? "fullrow" : ""}`}>
       <h4>{title}</h4>
       {sub && <p className="hint" style={{ marginTop: -4 }}>{sub}</p>}
       {children}
@@ -131,6 +131,41 @@ export default function StatsView({ events, members }) {
         <div className="kpi"><span className="kpi-n">{anos.length}</span><span className="kpi-l">Anos ativos</span></div>
       </div>
 
+        <Card title="Presenças dos membros ao longo do tempo" sub={cumul ? "Total acumulado de presenças, mês a mês" : "Presenças de cada membro em cada mês"} wide fullrow>
+          <div className="segmented" style={{ marginBottom: 10 }}>
+            <button className={!cumul ? "on" : ""} onClick={() => setCumul(false)}>Por mês</button>
+            <button className={cumul ? "on" : ""} onClick={() => setCumul(true)}>Cumulativo</button>
+          </div>
+          <div className="loc-picker">
+            {[...memPresent].sort((a, b) => (memTotals[b.id] || 0) - (memTotals[a.id] || 0)).map((m) => {
+              const on = activeMembers.includes(m.id);
+              return (
+                <button key={m.id} type="button" className={`pill ${on ? "on" : ""}`}
+                  onClick={() => {
+                    const base = selMembers || memPresent.map((x) => x.id);
+                    setSelMembers(on ? base.filter((x) => x !== m.id) : [...base, m.id]);
+                  }}>
+                  {m.name} ({memTotals[m.id] || 0})
+                </button>
+              );
+            })}
+            {selMembers && <button className="btn ghost small" onClick={() => setSelMembers(null)}>Todos</button>}
+          </div>
+          <ResponsiveContainer width="100%" height={420}>
+            <LineChart data={attMemberEvolution}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#2A241E" />
+              <XAxis dataKey="mes" {...axis} interval="preserveStartEnd" minTickGap={20} /><YAxis allowDecimals={false} {...axis} />
+              <Tooltip contentStyle={tooltipStyle} />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              {activeMembers.map((id, i) => (
+                <Line key={id} type="monotone" dataKey={nameOf(id)} stroke={BIGPAL[i % BIGPAL.length]} strokeWidth={2} dot={{ r: 2 }} />
+              ))}
+              <Brush dataKey="mes" height={22} travellerWidth={8} stroke="#FF7A3D" fill="#211C17" />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
+
+
       <div className="stat-grid">
         <Card title="Eventos por ano">
           <ResponsiveContainer width="100%" height={240}>
@@ -210,38 +245,6 @@ export default function StatsView({ events, members }) {
           </ResponsiveContainer>
         </Card>
 
-        <Card title="Presenças dos membros ao longo do tempo" sub={cumul ? "Total acumulado de presenças, mês a mês" : "Presenças de cada membro em cada mês"} wide>
-          <div className="segmented" style={{ marginBottom: 10 }}>
-            <button className={!cumul ? "on" : ""} onClick={() => setCumul(false)}>Por mês</button>
-            <button className={cumul ? "on" : ""} onClick={() => setCumul(true)}>Cumulativo</button>
-          </div>
-          <div className="loc-picker">
-            {[...memPresent].sort((a, b) => (memTotals[b.id] || 0) - (memTotals[a.id] || 0)).map((m) => {
-              const on = activeMembers.includes(m.id);
-              return (
-                <button key={m.id} type="button" className={`pill ${on ? "on" : ""}`}
-                  onClick={() => {
-                    const base = selMembers || memPresent.map((x) => x.id);
-                    setSelMembers(on ? base.filter((x) => x !== m.id) : [...base, m.id]);
-                  }}>
-                  {m.name} ({memTotals[m.id] || 0})
-                </button>
-              );
-            })}
-            {selMembers && <button className="btn ghost small" onClick={() => setSelMembers(null)}>Todos</button>}
-          </div>
-          <ResponsiveContainer width="100%" height={300}>
-            <LineChart data={attMemberEvolution}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#2A241E" />
-              <XAxis dataKey="mes" {...axis} interval="preserveStartEnd" minTickGap={20} /><YAxis allowDecimals={false} {...axis} />
-              <Tooltip contentStyle={tooltipStyle} />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              {activeMembers.map((id, i) => (
-                <Line key={id} type="monotone" dataKey={nameOf(id)} stroke={BIGPAL[i % BIGPAL.length]} strokeWidth={2} dot={{ r: 2 }} />
-              ))}
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
       </div>
       {semLocal > 0 && <p className="hint">{semLocal} evento(s) sem localização não entram nos gráficos de locais — associa-os na Gestão › Gestão de eventos.</p>}
     </div>
@@ -260,6 +263,7 @@ function StatsStyle() {
       .stat-card h4 { margin: 0 0 8px; }
       .loc-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
       .stat-card.wide { grid-column: span 2; }
+      .stat-card.fullrow { width: 100%; margin-bottom: 16px; box-sizing: border-box; }
       @media (max-width: 720px) { .stat-card.wide { grid-column: span 1; } }
     `}</style>
   );
