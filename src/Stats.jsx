@@ -280,6 +280,18 @@ export default function StatsView({ events, members }) {
           </ResponsiveContainer>
         </Card>
 
+
+      </div>
+      <div className="co-select">
+        <h4 style={{ margin: "0 0 8px" }}>Locais & companhias</h4>
+        <label style={{ maxWidth: 320, display: "block" }}>Companhias de
+          <select value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setOpenMost(null); setOpenLeast(null); }}>
+            <option value="">— escolher membro —</option>
+            {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+      </div>
+      <div className="stat-grid" style={{ marginTop: 12 }}>
         <Card title="Evolução dos locais ao longo dos anos" sub="Escolhe os locais a comparar" wide>
           <div className="loc-picker">
             {locCounts.slice(0, 12).map((x, i) => {
@@ -310,22 +322,12 @@ export default function StatsView({ events, members }) {
             </LineChart>
           </ResponsiveContainer>
         </Card>
-
-      </div>
-      <div className="stat-card fullrow" style={{ marginTop: 16 }}>
-        <h4>Companhias — com quem andas mais (e menos)</h4>
-        <label style={{ maxWidth: 320, display: "block" }}>Escolhe um membro
-          <select value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setOpenMost(null); setOpenLeast(null); }}>
-            <option value="">— escolher membro —</option>
-            {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
-          </select>
-        </label>
-        {partnerId && (
-          <div className="co-grid">
-            <CoCard title="Top 5 — mais eventos juntos" rows={mostRows} openId={openMost} setOpenId={setOpenMost} />
-            <CoCard title="Top 5 — menos eventos juntos" rows={leastRows} openId={openLeast} setOpenId={setOpenLeast} />
-          </div>
-        )}
+        {partnerId
+          ? <CoCard title="Top 5 — mais eventos juntos" rows={mostRows} openId={openMost} setOpenId={setOpenMost} />
+          : <div className="stat-card"><h4>Top 5 — mais eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
+        {partnerId
+          ? <CoCard title="Top 5 — menos eventos juntos" rows={leastRows} openId={openLeast} setOpenId={setOpenLeast} />
+          : <div className="stat-card"><h4>Top 5 — menos eventos juntos</h4><p className="hint">Escolhe um membro acima.</p></div>}
       </div>
       {semLocal > 0 && <p className="hint">{semLocal} evento(s) sem localização não entram nos gráficos de locais — associa-os na Gestão › Gestão de eventos.</p>}
     </div>
@@ -345,8 +347,6 @@ function StatsStyle() {
       .loc-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
       .stat-card.wide { grid-column: span 2; }
       .stat-card.fullrow { width: 100%; margin-bottom: 16px; box-sizing: border-box; }
-      .co-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
-      .co-grid .stat-card { background: var(--surface); }
       .co-list { display: flex; flex-direction: column; gap: 4px; }
       .co-row { display: flex; align-items: center; gap: 8px; width: 100%; background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; color: inherit; text-align: left; }
       .co-row:hover { border-color: var(--ember); }
