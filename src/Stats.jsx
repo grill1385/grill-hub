@@ -93,13 +93,26 @@ export default function StatsView({ events, members }) {
     return t;
   }, [memPresent, evs]);
   const nameOf = (id) => (members.find((m) => m.id === id)?.name || id);
-  const attMemberEvolution = useMemo(() => anos.map((y) => {
-    const row = { ano: y };
+  const meses = useMemo(() => {
+    const keys = evs.map((e) => e.dateStart.slice(0, 7)).sort();
+    if (!keys.length) return [];
+    const out = []; const [y0, m0] = keys[0].split("-").map(Number); const [y1, m1] = keys[keys.length - 1].split("-").map(Number);
+    let y = y0, m = m0;
+    let guard = 0;
+    while ((y < y1 || (y === y1 && m <= m1)) && guard++ < 600) {
+      out.push(`${y}-${String(m).padStart(2, "0")}`);
+      m++; if (m > 12) { m = 1; y++; }
+    }
+    return out;
+  }, [evs]);
+  const fmtMes = (k) => { const [y, m] = k.split("-"); return `${MESES[Number(m) - 1]}/${y.slice(2)}`; };
+  const attMemberEvolution = useMemo(() => meses.map((k) => {
+    const row = { mes: fmtMes(k) };
     activeMembers.forEach((id) => {
-      row[nameOf(id)] = evs.filter((e) => e.dateStart.slice(0, 4) === y && e.presences?.[id]).length;
+      row[nameOf(id)] = evs.filter((e) => e.dateStart.slice(0, 7) === k && e.presences?.[id]).length;
     });
     return row;
-  }), [anos, activeMembers, evs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }), [meses, activeMembers, evs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const totalEventos = evs.length;
   const totalConcluidos = evs.filter((e) => Object.values(e.presences || {}).some(Boolean)).length;
@@ -216,7 +229,7 @@ export default function StatsView({ events, members }) {
           <ResponsiveContainer width="100%" height={300}>
             <LineChart data={attMemberEvolution}>
               <CartesianGrid strokeDasharray="3 3" stroke="#2A241E" />
-              <XAxis dataKey="ano" {...axis} /><YAxis allowDecimals={false} {...axis} />
+              <XAxis dataKey="mes" {...axis} interval="preserveStartEnd" minTickGap={20} /><YAxis allowDecimals={false} {...axis} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               {activeMembers.map((id, i) => (
