@@ -26,6 +26,36 @@ function Card({ title, children, sub, wide, fullrow }) {
   );
 }
 
+const fmtDia = (iso) => { if (!iso) return ""; const [y, m, d] = iso.split("-"); return `${d}/${m}/${y}`; };
+
+function CoCard({ title, rows, openId, setOpenId }) {
+  return (
+    <div className="stat-card">
+      <h4>{title}</h4>
+      {rows.length === 0 && <p className="hint">Sem dados.</p>}
+      <div className="co-list">
+        {rows.map((r) => (
+          <div key={r.id} className="co-item">
+            <button className="co-row" onClick={() => setOpenId(openId === r.id ? null : r.id)}>
+              <span className="co-name">{r.name}</span>
+              <span className="co-count">{r.count} evento{r.count === 1 ? "" : "s"}</span>
+              <span className="co-caret">{openId === r.id ? "▾" : "▸"}</span>
+            </button>
+            {openId === r.id && (
+              <div className="co-events">
+                {r.events.length === 0 ? <p className="hint" style={{ margin: "2px 0" }}>Nunca estiveram juntos.</p>
+                  : r.events.map((e) => (
+                    <div key={e.id} className="co-ev"><span>{e.name}</span><span className="hint" style={{ margin: 0 }}>{fmtDia(e.dateStart)}</span></div>
+                  ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function StatsView({ events, members }) {
   const evs = useMemo(() => (events || []).filter((e) => e.dateStart), [events]);
 
@@ -125,6 +155,21 @@ export default function StatsView({ events, members }) {
       return row;
     });
   }, [meses, activeMembers, evs, cumul, unit]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /* co-presença: com quem cada membro esteve em mais/menos eventos */
+  const [partnerId, setPartnerId] = useState("");
+  const [openMost, setOpenMost] = useState(null);
+  const [openLeast, setOpenLeast] = useState(null);
+  const coRows = useMemo(() => {
+    if (!partnerId) return [];
+    return (members || []).filter((m) => m.id !== partnerId).map((m) => {
+      const events = evs.filter((e) => e.presences?.[partnerId] && e.presences?.[m.id])
+        .sort((a, b) => (b.dateStart || "").localeCompare(a.dateStart || ""));
+      return { id: m.id, name: m.name, count: events.length, events };
+    });
+  }, [partnerId, members, evs]);
+  const mostRows = useMemo(() => [...coRows].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 5), [coRows]);
+  const leastRows = useMemo(() => [...coRows].sort((a, b) => a.count - b.count || a.name.localeCompare(b.name)).slice(0, 5), [coRows]);
 
   const totalEventos = evs.length;
   const totalConcluidos = evs.filter((e) => Object.values(e.presences || {}).some(Boolean)).length;
@@ -267,6 +312,21 @@ export default function StatsView({ events, members }) {
         </Card>
 
       </div>
+      <div className="stat-card fullrow" style={{ marginTop: 16 }}>
+        <h4>Companhias — com quem andas mais (e menos)</h4>
+        <label style={{ maxWidth: 320, display: "block" }}>Escolhe um membro
+          <select value={partnerId} onChange={(e) => { setPartnerId(e.target.value); setOpenMost(null); setOpenLeast(null); }}>
+            <option value="">— escolher membro —</option>
+            {[...(members || [])].sort((a, b) => a.name.localeCompare(b.name)).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+        </label>
+        {partnerId && (
+          <div className="co-grid">
+            <CoCard title="Top 5 — mais eventos juntos" rows={mostRows} openId={openMost} setOpenId={setOpenMost} />
+            <CoCard title="Top 5 — menos eventos juntos" rows={leastRows} openId={openLeast} setOpenId={setOpenLeast} />
+          </div>
+        )}
+      </div>
       {semLocal > 0 && <p className="hint">{semLocal} evento(s) sem localização não entram nos gráficos de locais — associa-os na Gestão › Gestão de eventos.</p>}
     </div>
   );
@@ -285,6 +345,16 @@ function StatsStyle() {
       .loc-picker { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
       .stat-card.wide { grid-column: span 2; }
       .stat-card.fullrow { width: 100%; margin-bottom: 16px; box-sizing: border-box; }
+      .co-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-top: 12px; }
+      .co-grid .stat-card { background: var(--surface); }
+      .co-list { display: flex; flex-direction: column; gap: 4px; }
+      .co-row { display: flex; align-items: center; gap: 8px; width: 100%; background: var(--surface2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; cursor: pointer; color: inherit; text-align: left; }
+      .co-row:hover { border-color: var(--ember); }
+      .co-name { flex: 1; font-weight: 600; }
+      .co-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+      .co-caret { color: var(--muted); }
+      .co-events { padding: 6px 10px 4px; display: flex; flex-direction: column; gap: 3px; }
+      .co-ev { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 2px 0; border-bottom: 1px solid var(--line); }
       @media (max-width: 720px) { .stat-card.wide { grid-column: span 1; } }
     `}</style>
   );
