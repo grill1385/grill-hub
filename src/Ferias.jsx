@@ -1621,7 +1621,7 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, isAdmin, myMemb
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
         <button className="btn ember"
-          disabled={!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length || (f.split === "custom" && !sumOk)}
+          disabled={!f.description.trim() || !f.payerId || (usingParcels ? !parcelsOk : (!(Number(f.total) > 0) || !f.participants.length || (f.split === "custom" && !sumOk)))}
           onClick={submit}>
           Guardar compra
         </button>

@@ -2056,7 +2056,7 @@ function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, o
       {f.receipts.length > 0 && <p className="hint">{f.receipts.length} foto(s) já carregada(s).</p>}
       <div className="actions">
         {editing && <button className="btn danger" disabled={busy} onClick={() => onDelete(purchase)}>Eliminar</button>}
-        <button className="btn ember" disabled={busy || (f.split === "custom" && !sumOk)} onClick={submit}>{busy ? "A carregar…" : "Guardar compra"}</button>
+        <button className="btn ember" disabled={busy || (usingParcels ? !parcelsOk : (f.split === "custom" && !sumOk))} onClick={submit}>{busy ? "A carregar…" : "Guardar compra"}</button>
       </div>
     </Modal>
   );
