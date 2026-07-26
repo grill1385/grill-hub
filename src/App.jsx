@@ -30,10 +30,20 @@ const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} 
 
 const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 
-const shareOf = (pu, mid) =>
-  pu.split === "custom"
-    ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
-    : (pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0);
+const shareOf = (pu, mid) => {
+  if (pu.split === "custom") {
+    if (pu.parcels?.length) {
+      let t = 0;
+      pu.parcels.forEach((pc) => {
+        const ms = pc.members || [];
+        if (ms.length && ms.includes(mid)) t += (Number(pc.price) || 0) / ms.length;
+      });
+      return Math.round(t * 100) / 100;
+    }
+    return Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100;
+  }
+  return pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0;
+};
 
 /* Compensação de dívidas por pares (líquido).
    Considera só dívidas ainda por saldar e não reclamadas ("já paguei").
@@ -524,6 +534,15 @@ export default function App() {
     } catch { showToast("Não foi possível eliminar a compra."); }
   }
 
+  async function importPurchases(evId, list) {
+    try {
+      for (const pu of list) await api.savePurchase(pu);
+      setData({ ...data, purchases: [...data.purchases, ...list] });
+      setModal({ type: "eventDetail", id: evId });
+      showToast(`${list.length} compra(s) importada(s).`);
+    } catch { showToast("A importação falhou a meio — verifica as contas do evento."); }
+  }
+
   async function toggleSettled(pu, memberId) {
     const next = { ...pu, settled: { ...pu.settled, [memberId]: !pu.settled[memberId] } };
     try {
@@ -899,6 +918,7 @@ export default function App() {
           onShare={() => shareEvent(ev)}
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
+          onImportPurchases={() => setModal({ type: "importPurchases", eventId: ev.id })}
           onToggleSettled={toggleSettled}
           onClaim={claimPayment}
           onClose={() => setModal(null)} />;
@@ -933,6 +953,14 @@ export default function App() {
         const pu = data.purchases.find((p) => p.id === modal.id);
         return <PurchaseFormModal ev={ev} purchase={pu} members={data.members} isAdmin={isAdmin} myMember={myMember}
           onSave={savePurchase} onDelete={deletePurchase}
+          onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
+      })()}
+
+      {modal?.type === "importPurchases" && (() => {
+        const ev = data.events.find((e) => e.id === modal.eventId);
+        if (!ev) return null;
+        return <ImportPurchasesModal ev={ev} members={data.members} myMember={myMember}
+          onImport={(list) => importPurchases(ev.id, list)}
           onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
       })()}
 
@@ -1300,7 +1328,7 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onToggleSettled, onClaim, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
   /* saldos compensados: por devedor, a quem e quanto deve pagar */
   const settle = pairwiseNet(purchases);
@@ -1398,8 +1426,16 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
               {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? (pu.parcels?.length ? "por parcelas" : "valores individuais") : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
             </div>
+            {pu.parcels?.length > 0 && (
+              <div className="hint parcel-line" style={{ marginTop: 0 }}>
+                {pu.parcels.map((pc, i) => {
+                  const names = (pc.members || []).map((x) => members.find((m) => m.id === x)?.name || "?").join(", ");
+                  return <span key={pc.id || i}>{i > 0 ? " · " : ""}{pc.name || "Parcela"} <b>{eur(pc.price)}</b> ({names || "por atribuir"})</span>;
+                })}
+              </div>
+            )}
             <div className="pill-row">
               {parts.map((mid) => {
                 const m = members.find((x) => x.id === mid);
@@ -1448,6 +1484,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
       {(isAdmin || myMember) && (
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn ghost small" onClick={onAddPurchase}>+ Compra</button>
+          {isAdmin && <button className="btn ghost small" onClick={onImportPurchases}>Importar Excel</button>}
           {isAdmin && mailtoHref && <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>}
         </div>
       )}
@@ -1715,6 +1752,131 @@ function ImportEventsModal({ members, onImport, onClose }) {
   );
 }
 
+function ImportPurchasesModal({ ev, members, myMember, onImport, onClose }) {
+  const [preview, setPreview] = useState(null); // {purchases, errors}
+  const [busy, setBusy] = useState(false);
+  const num = (v) => { const n = Number(String(v ?? "").replace("€", "").replace(",", ".").trim()); return isFinite(n) ? n : NaN; };
+
+  async function parseFile(file) {
+    try {
+      const byName = new Map(members.map((m) => [norm(m.name), m]));
+      const wb = XLSX.read(await file.arrayBuffer(), { cellDates: true });
+      const sheetName = wb.SheetNames.find((n) => norm(n) === "compras") || wb.SheetNames[0];
+      const raw = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" });
+      const errors = [];
+      const groups = new Map(); // compra -> linhas
+      raw.forEach((row, i) => {
+        const get = (...keys) => { for (const k of Object.keys(row)) if (keys.includes(norm(k))) return row[k]; return ""; };
+        const compra = String(get("compra", "descricao", "descrição") || "").trim();
+        const parcela = String(get("parcela", "subparcela", "sub-parcela") || "").trim();
+        const preco = get("preco (eur)", "preco (\u20ac)", "preco", "preço (\u20ac)", "preço", "valor", "valor (\u20ac)");
+        const linha = i + 2;
+        if (!compra && !parcela && !String(preco).trim()) return; // linha vazia
+        if (!compra) { errors.push(`Linha ${linha}: falta o nome da compra.`); return; }
+        if (norm(compra).includes("(exemplo)")) return;
+        if (!groups.has(compra)) groups.set(compra, []);
+        groups.get(compra).push({
+          linha, parcela, preco,
+          membrosStr: String(get("membros", "membros (opcional)") || "").trim(),
+          divisao: norm(String(get("divisao", "divisão") || "")),
+          pagador: String(get("pagador", "pagador (opcional)", "pagou") || "").trim(),
+        });
+      });
+      const purchases = [];
+      const parseMembros = (str, linha, out = []) => {
+        String(str || "").split(/[;,]/).map((x) => x.trim()).filter(Boolean).forEach((nm) => {
+          const m = byName.get(norm(nm));
+          if (!m) errors.push(`Linha ${linha}: membro "${nm}" não existe no site.`);
+          else if (!out.includes(m.id)) out.push(m.id);
+        });
+        return out;
+      };
+      for (const [compra, rows] of groups) {
+        const div = rows.map((r) => r.divisao).find(Boolean) || "";
+        const isParcelas = div ? (div.includes("parcel") || div.includes("pago o que")) : rows.some((r) => r.parcela);
+        const pagadorName = rows.map((r) => r.pagador).find(Boolean) || "";
+        let payer = myMember || null;
+        if (pagadorName) payer = byName.get(norm(pagadorName)) || null;
+        if (pagadorName && !payer) { errors.push(`Compra "${compra}": pagador "${pagadorName}" não é um membro conhecido.`); continue; }
+        if (!payer) { errors.push(`Compra "${compra}": preenche a coluna Pagador (a tua conta não está ligada a um membro).`); continue; }
+        if (isParcelas) {
+          const parcels = [];
+          rows.forEach((r) => {
+            const price = num(r.preco);
+            if (!(price > 0)) { errors.push(`Linha ${r.linha} ("${compra}"): preço da parcela inválido.`); return; }
+            parcels.push({ id: uid(), name: r.parcela || `Parcela ${parcels.length + 1}`, price: Math.round(price * 100) / 100, members: parseMembros(r.membrosStr, r.linha) });
+          });
+          if (!parcels.length) continue;
+          const total = Math.round(parcels.reduce((a, pc) => a + pc.price, 0) * 100) / 100;
+          purchases.push({
+            id: uid(), eventId: ev.id, description: compra, total,
+            payerId: payer.id, participants: [...new Set(parcels.flatMap((pc) => pc.members))],
+            settled: {}, receipts: [], split: "custom", shares: {}, parcels,
+          });
+        } else {
+          const r0 = rows[0];
+          if (rows.length > 1) errors.push(`Compra "${compra}": divisão por todos deve ter só 1 linha (tem ${rows.length}).`);
+          const total = num(r0.preco);
+          if (!(total > 0)) { errors.push(`Linha ${r0.linha} ("${compra}"): valor total inválido.`); continue; }
+          let participants = parseMembros(rows.map((r) => r.membrosStr).filter(Boolean).join(";"), r0.linha);
+          if (!participants.length) {
+            const st = getStatus(ev);
+            const src = st === "Concluído" ? ev.presences : (Object.values(ev.confirmations || {}).some(Boolean) ? ev.confirmations : null);
+            participants = (src ? members.filter((m) => src[m.id]) : members).map((m) => m.id);
+          }
+          purchases.push({
+            id: uid(), eventId: ev.id, description: compra, total: Math.round(total * 100) / 100,
+            payerId: payer.id, participants, settled: {}, receipts: [], split: "equal", shares: {}, parcels: [],
+          });
+        }
+      }
+      setPreview({ purchases, errors });
+    } catch {
+      setPreview({ purchases: [], errors: ["Não foi possível ler o ficheiro. É um .xlsx válido?"] });
+    }
+  }
+
+  const canImport = preview && preview.purchases.length > 0 && preview.errors.length === 0;
+  return (
+    <Modal title={`Importar compras — ${ev.name}`} onClose={onClose} wide>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Usa o <a href="./template-compras.xlsx" download style={{ color: "var(--ember)" }}>template de compras</a> —
+        divisão «todos» numa linha, ou «parcelas» com uma linha por parcela (mesmo nome de Compra).
+        Os membros por parcela são opcionais — podem associar-se depois na compra.
+      </p>
+      <label>Ficheiro Excel (.xlsx)
+        <input type="file" accept=".xlsx,.xls" onChange={(e) => { const fl = e.target.files[0]; if (fl) parseFile(fl); }} />
+      </label>
+      {preview && (
+        <>
+          {preview.errors.length > 0 && (
+            <div>
+              <p className="err" style={{ marginBottom: 4 }}>Erros ({preview.errors.length}) — corrige e volta a carregar:</p>
+              {preview.errors.slice(0, 12).map((e, i) => <p key={i} className="err" style={{ margin: "2px 0" }}>{e}</p>)}
+              {preview.errors.length > 12 && <p className="err">… e mais {preview.errors.length - 12}.</p>}
+            </div>
+          )}
+          <p><b>{preview.purchases.length}</b> compra(s) prontas a importar:</p>
+          <div className="mini-list">
+            {preview.purchases.map((pu) => (
+              <div key={pu.id} className="mini-item" style={{ cursor: "default" }}>
+                <span>{pu.description} — {pu.split === "custom" ? `${pu.parcels.length} parcela(s)` : `${pu.participants.length} participante(s)`} · pagou {members.find((m) => m.id === pu.payerId)?.name || "?"}</span>
+                <span className="mini-date">{eur(pu.total)}</span>
+              </div>
+            ))}
+          </div>
+          <div className="actions">
+            <button className="btn ember" disabled={!canImport || busy}
+              onClick={async () => { setBusy(true); await onImport(preview.purchases); }}>
+              {busy ? "A importar…" : `Importar ${preview.purchases.length} compra(s)`}
+            </button>
+          </div>
+        </>
+      )}
+    </Modal>
+  );
+}
+
 function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, onDelete, onClose }) {
   const editing = !!purchase;
   const defaultParts = useMemo(() => {
@@ -1737,20 +1899,50 @@ function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, o
     receipts: [...(purchase?.receipts || [])],
     split: purchase?.split || "equal",
     shares: { ...(purchase?.shares || {}) },
+    parcels: (purchase?.parcels || []).map((pc) => ({ ...pc, members: [...(pc.members || [])] })),
   }));
   const [files, setFiles] = useState([]);
   const [busy, setBusy] = useState(false);
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
   const toggleP = (id) =>
     set("participants", f.participants.includes(id) ? f.participants.filter((x) => x !== id) : [...f.participants, id]);
+  /* parcelas ("só pago o que como"): cada parcela divide o preço pelos seus membros */
+  const legacyShares = purchase?.split === "custom" && !(purchase?.parcels?.length) && Object.keys(purchase?.shares || {}).length > 0;
+  const usingParcels = f.split === "custom" && !legacyShares;
+  const setParcel = (i, k, v) => setF((o) => ({ ...o, parcels: o.parcels.map((pc, j) => (j === i ? { ...pc, [k]: v } : pc)) }));
+  const toggleParcelMember = (i, mid) => setF((o) => ({
+    ...o,
+    parcels: o.parcels.map((pc, j) => {
+      if (j !== i) return pc;
+      const ms = pc.members || [];
+      return { ...pc, members: ms.includes(mid) ? ms.filter((x) => x !== mid) : [...ms, mid] };
+    }),
+  }));
+  const addParcel = () => setF((o) => ({ ...o, parcels: [...o.parcels, { id: uid(), name: "", price: "", members: [] }] }));
+  const rmParcel = (i) => setF((o) => ({ ...o, parcels: o.parcels.filter((_, j) => j !== i) }));
+  const parcelsSum = Math.round(f.parcels.reduce((acc, pc) => acc + (Number(pc.price) || 0), 0) * 100) / 100;
+  const parcelsOk = f.parcels.length > 0 && f.parcels.every((pc) => Number(pc.price) > 0);
+  const pool = useMemo(() => {
+    const st = getStatus(ev);
+    const src = st === "Concluído" ? ev.presences : (Object.values(ev.confirmations || {}).some(Boolean) ? ev.confirmations : null);
+    let ids = (src ? members.filter((m) => src[m.id]) : members).map((m) => m.id);
+    if (!ids.length) ids = members.map((m) => m.id);
+    [...(purchase?.participants || []), ...((purchase?.parcels || []).flatMap((pc) => pc.members || []))]
+      .forEach((id) => { if (!ids.includes(id)) ids.push(id); });
+    return ids;
+  }, [ev, members, purchase]);
   const share = f.participants.length && Number(f.total) > 0
     ? Math.round((Number(f.total) / f.participants.length) * 100) / 100 : 0;
   const sumShares = Math.round(f.participants.reduce((acc, id) => acc + (Number(f.shares[id]) || 0), 0) * 100) / 100;
   const sumOk = Math.abs(sumShares - (Number(f.total) || 0)) < 0.005;
 
   async function submit() {
-    if (!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length) return;
-    if (f.split === "custom" && !sumOk) return;
+    const total = usingParcels ? parcelsSum : Math.round(Number(f.total) * 100) / 100;
+    const participants = usingParcels ? [...new Set(f.parcels.flatMap((pc) => pc.members || []))] : f.participants;
+    if (!f.description.trim() || !(total > 0) || !f.payerId) return;
+    if (usingParcels && !parcelsOk) return;
+    if (!usingParcels && !f.participants.length) return;
+    if (f.split === "custom" && !usingParcels && !sumOk) return;
     setBusy(true);
     try {
       let receipts = f.receipts;
@@ -1761,12 +1953,15 @@ function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, o
       }
       onSave({
         id: f.id, eventId: ev.id, description: f.description.trim(),
-        total: Math.round(Number(f.total) * 100) / 100,
-        payerId: f.payerId, participants: f.participants, settled: f.settled, receipts,
+        total,
+        payerId: f.payerId, participants, settled: f.settled, receipts,
         split: f.split,
-        shares: f.split === "custom"
+        shares: f.split === "custom" && !usingParcels
           ? Object.fromEntries(f.participants.map((id) => [id, Math.round((Number(f.shares[id]) || 0) * 100) / 100]))
           : {},
+        parcels: usingParcels
+          ? f.parcels.map((pc) => ({ id: pc.id || uid(), name: String(pc.name || "").trim(), price: Math.round(Number(pc.price) * 100) / 100, members: pc.members || [] }))
+          : [],
       });
     } catch { setBusy(false); }
   }
@@ -1775,7 +1970,11 @@ function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, o
     <Modal title={editing ? "Editar compra" : "Nova compra"} onClose={onClose} wide>
       <label>Descrição<input value={f.description} onChange={(e) => set("description", e.target.value)} autoFocus placeholder="ex.: Carne para o churrasco" /></label>
       <div className="row">
-        <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
+        <label>Valor total (€)
+          {usingParcels
+            ? <input value={parcelsSum > 0 ? parcelsSum.toFixed(2).replace(".", ",") : ""} placeholder="soma das parcelas" disabled title="Calculado automaticamente: soma das parcelas" />
+            : <input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} />}
+        </label>
         <label>Quem pagou (a quem devem)
           {isAdmin ? (
             <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
@@ -1793,27 +1992,61 @@ function PurchaseFormModal({ ev, purchase, members, isAdmin, myMember, onSave, o
           <button type="button" className={f.split === "custom" ? "on" : ""} onClick={() => set("split", "custom")}>Só pago o que como</button>
         </div>
       </label>
-      <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
-      <div className="pill-row">
-        {members.map((m) => (
-          <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
-        ))}
-      </div>
-      {f.split === "custom" && (
+      {usingParcels ? (
         <>
-          <div className="shares-grid">
-            {f.participants.map((id) => {
-              const m = members.find((x) => x.id === id);
-              return (
-                <label key={id}>{m?.name || id} (€)
-                  <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
-                    onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
-                </label>
-              );
-            })}
+          <h4>Parcelas{parcelsSum > 0 ? ` · total ${eur(parcelsSum)}` : ""}</h4>
+          {f.parcels.map((pc, i) => (
+            <div key={pc.id || i} className="parcel">
+              <div className="row" style={{ alignItems: "flex-end" }}>
+                <label>Parcela<input placeholder="ex.: Frango" value={pc.name} onChange={(e) => setParcel(i, "name", e.target.value)} /></label>
+                <label>Preço (€)<input type="number" min="0" step="0.01" value={pc.price} onChange={(e) => setParcel(i, "price", e.target.value)} /></label>
+                <button type="button" className="iconbtn" title="Remover parcela" onClick={() => rmParcel(i)}>✕</button>
+              </div>
+              <div className="pill-row">
+                {pool.map((mid) => {
+                  const m = members.find((x) => x.id === mid);
+                  if (!m) return null;
+                  const on = (pc.members || []).includes(mid);
+                  return (
+                    <button key={mid} type="button" className={`pill ${on ? "on" : ""}`} onClick={() => toggleParcelMember(i, mid)}>
+                      {m.name}{on && pc.members.length ? ` · ${eur((Number(pc.price) || 0) / pc.members.length)}` : ""}
+                    </button>
+                  );
+                })}
+              </div>
+              {!(pc.members || []).length && <p className="hint" style={{ margin: "4px 0 0" }}>Sem membros associados — fica «por atribuir» (pode preencher-se mais tarde).</p>}
+            </div>
+          ))}
+          <button type="button" className="btn ghost small" onClick={addParcel}>+ Parcela</button>
+          {f.parcels.length === 0 && <p className="hint">Adiciona parcelas (ex.: Frango 80€) e associa os membros de cada uma — cada parcela é dividida pelos membros associados.</p>}
+          {f.parcels.length > 0 && !parcelsOk && <p className="err">Todas as parcelas precisam de preço maior que 0.</p>}
+        </>
+      ) : (
+        <>
+          <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
+          {legacyShares && f.split === "custom" && <p className="hint" style={{ marginTop: 0 }}>Compra antiga com valores manuais por membro — mantém-se assim; compras novas usam parcelas.</p>}
+          <div className="pill-row">
+            {members.map((m) => (
+              <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
+            ))}
           </div>
-          {!sumOk && (
-            <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+          {f.split === "custom" && (
+            <>
+              <div className="shares-grid">
+                {f.participants.map((id) => {
+                  const m = members.find((x) => x.id === id);
+                  return (
+                    <label key={id}>{m?.name || id} (€)
+                      <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
+                        onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
+                    </label>
+                  );
+                })}
+              </div>
+              {!sumOk && (
+                <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+              )}
+            </>
           )}
         </>
       )}
@@ -2233,6 +2466,9 @@ function Style() {
       .filter-bar select { padding:7px 10px; }
       .btn.ghost.active-filter { border-color:var(--ember); color:var(--ember); }
       .shares-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(140px, 1fr)); gap:6px 12px; margin-top:10px; }
+      .parcel { border:1px dashed var(--line); border-radius:10px; padding:10px 12px; margin-bottom:10px; }
+      .parcel .row { margin-bottom:6px; }
+      .parcel-line { word-break:break-word; }
       .debt-line { font-size:12.5px; color:var(--muted); }
       .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
       .debt-line b { color:var(--ember); }

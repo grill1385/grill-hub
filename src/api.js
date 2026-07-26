@@ -41,7 +41,7 @@ const toPurchase = (r) => ({
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, receipts: r.receipts || [],
   split: r.split || "equal", shares: r.shares || {},
-
+  parcels: r.parcels || [],
   claimed: r.claimed || {},
 });
 /* claimed fica de fora do fromPurchase de propósito: só muda via RPC
@@ -50,7 +50,7 @@ const fromPurchase = (p) => ({
   id: p.id, event_id: p.eventId, description: p.description, total: p.total,
   payer_member_id: p.payerId || null, participants: p.participants || [],
   settled: p.settled || {}, receipts: p.receipts || [],
-  split: p.split || "equal", shares: p.shares || {},
+  split: p.split || "equal", shares: p.shares || {}, parcels: p.parcels || [],
 });
 
 export const api = {
@@ -180,7 +180,7 @@ const toVPurchase = (r) => ({
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, split: r.split || "equal", shares: r.shares || {},
   sourceKey: r.source_key || null, createdAt: r.created_at || null,
-  claimed: r.claimed || {},
+  parcels: r.parcels || [], claimed: r.claimed || {},
 });
 /* claimed fica de fora do fromVPurchase: só muda via RPC claim_my_vacation_payment */
 /* created_at fica de fora: é definido pela BD no insert e não deve ser pisado */
@@ -188,7 +188,7 @@ const fromVPurchase = (p) => ({
   id: p.id, vacation_id: p.vacationId, description: p.description, total: p.total,
   payer_member_id: p.payerId || null, participants: p.participants || [],
   settled: p.settled || {}, split: p.split || "equal", shares: p.shares || {},
-  source_key: p.sourceKey || null,
+  parcels: p.parcels || [], source_key: p.sourceKey || null,
 });
 const toVTask = (r) => ({
   id: r.id, vacationId: r.vacation_id, autoKey: r.auto_key, title: r.title,

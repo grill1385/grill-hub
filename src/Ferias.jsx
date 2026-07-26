@@ -67,10 +67,47 @@ function statusBlocker(target, links) {
   return null;
 }
 
-const shareOf = (pu, mid) =>
-  pu.split === "custom"
-    ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
-    : (pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0);
+const shareOf = (pu, mid) => {
+  if (pu.split === "custom") {
+    if (pu.parcels?.length) {
+      let t = 0;
+      pu.parcels.forEach((pc) => {
+        const ms = pc.members || [];
+        if (ms.length && ms.includes(mid)) t += (Number(pc.price) || 0) / ms.length;
+      });
+      return Math.round(t * 100) / 100;
+    }
+    return Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100;
+  }
+  return pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0;
+};
+
+function pairwiseNet(purchases) {
+  const owe = {}; // owe[devedor][credor] = valor
+  (purchases || []).forEach((pu) => {
+    const payer = pu.payerId;
+    if (!payer) return;
+    (pu.participants || []).forEach((mid) => {
+      if (mid === payer) return;
+      if (pu.settled?.[mid] || pu.claimed?.[mid]) return;
+      const a = shareOf(pu, mid);
+      if (a <= 0) return;
+      owe[mid] = owe[mid] || {};
+      owe[mid][payer] = (owe[mid][payer] || 0) + a;
+    });
+  });
+  const ids = [...new Set([...Object.keys(owe), ...Object.values(owe).flatMap((o) => Object.keys(o))])];
+  const out = []; // {from, to, amount}
+  for (let i = 0; i < ids.length; i++) {
+    for (let j = i + 1; j < ids.length; j++) {
+      const x = ids[i], y = ids[j];
+      const net = Math.round(((owe[x]?.[y] || 0) - (owe[y]?.[x] || 0)) * 100) / 100;
+      if (net > 0) out.push({ from: x, to: y, amount: net });
+      else if (net < 0) out.push({ from: y, to: x, amount: -net });
+    }
+  }
+  return out;
+}
 
 const placeName = (p) => (p ? p.city + (p.country ? ` (${p.country})` : "") : "?");
 const endName = (placeId, places) => (placeId ? placeName(places.find((p) => p.id === placeId)) : "Casinha");
@@ -1087,8 +1124,16 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
               {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? "valores individuais" : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
+              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? (pu.parcels?.length ? "por parcelas" : "valores individuais") : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
             </div>
+            {pu.parcels?.length > 0 && (
+              <div className="hint parcel-line" style={{ marginTop: 0 }}>
+                {pu.parcels.map((pc, i) => {
+                  const names = (pc.members || []).map((x) => members.find((m) => m.id === x)?.name || "?").join(", ");
+                  return <span key={pc.id || i}>{i > 0 ? " · " : ""}{pc.name || "Parcela"} <b>{eur(pc.price)}</b> ({names || "por atribuir"})</span>;
+                })}
+              </div>
+            )}
             <div className="pill-row">
               {parts.map((mid) => {
                 const m = members.find((x) => x.id === mid);
@@ -1114,6 +1159,19 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
           </div>
         );
       })}
+      {(() => {
+        const settle = pairwiseNet(purchases);
+        if (!settle.length) return null;
+        const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+        return (
+          <p className="hint net-summary">
+            <b>Saldos a acertar</b> (compensado): {settle
+              .sort((a, b) => b.amount - a.amount)
+              .map((sm) => `${nm(sm.from)} → ${nm(sm.to)}: ${eur(sm.amount)}`)
+              .join(" · ")}
+          </p>
+        );
+      })()}
       {isAdmin && mailtoHref && (
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>
@@ -1429,27 +1487,51 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, isAdmin, myMemb
     settled: { ...(purchase?.settled || {}) },
     split: purchase?.split || "equal",
     shares: { ...(purchase?.shares || {}) },
+    parcels: (purchase?.parcels || []).map((pc) => ({ ...pc, members: [...(pc.members || [])] })),
   }));
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
   const toggleP = (id) =>
     set("participants", f.participants.includes(id) ? f.participants.filter((x) => x !== id) : [...f.participants, id]);
+  /* parcelas ("só pago o que usufruo") */
+  const legacyShares = purchase?.split === "custom" && !(purchase?.parcels?.length) && Object.keys(purchase?.shares || {}).length > 0;
+  const usingParcels = f.split === "custom" && !legacyShares;
+  const setParcel = (i, k, v) => setF((o) => ({ ...o, parcels: o.parcels.map((pc, j) => (j === i ? { ...pc, [k]: v } : pc)) }));
+  const toggleParcelMember = (i, mid) => setF((o) => ({
+    ...o,
+    parcels: o.parcels.map((pc, j) => {
+      if (j !== i) return pc;
+      const ms = pc.members || [];
+      return { ...pc, members: ms.includes(mid) ? ms.filter((x) => x !== mid) : [...ms, mid] };
+    }),
+  }));
+  const addParcel = () => setF((o) => ({ ...o, parcels: [...o.parcels, { id: uid(), name: "", price: "", members: [] }] }));
+  const rmParcel = (i) => setF((o) => ({ ...o, parcels: o.parcels.filter((_, j) => j !== i) }));
+  const parcelsSum = Math.round(f.parcels.reduce((acc, pc) => acc + (Number(pc.price) || 0), 0) * 100) / 100;
+  const parcelsOk = f.parcels.length > 0 && f.parcels.every((pc) => Number(pc.price) > 0);
   const share = f.participants.length && Number(f.total) > 0
     ? Math.round((Number(f.total) / f.participants.length) * 100) / 100 : 0;
   const sumShares = Math.round(f.participants.reduce((acc, id) => acc + (Number(f.shares[id]) || 0), 0) * 100) / 100;
   const sumOk = Math.abs(sumShares - (Number(f.total) || 0)) < 0.005;
 
   function submit() {
-    if (!f.description.trim() || !(Number(f.total) > 0) || !f.payerId || !f.participants.length) return;
-    if (f.split === "custom" && !sumOk) return;
+    const total = usingParcels ? parcelsSum : Math.round(Number(f.total) * 100) / 100;
+    const participants = usingParcels ? [...new Set(f.parcels.flatMap((pc) => pc.members || []))] : f.participants;
+    if (!f.description.trim() || !(total > 0) || !f.payerId) return;
+    if (usingParcels && !parcelsOk) return;
+    if (!usingParcels && !f.participants.length) return;
+    if (f.split === "custom" && !usingParcels && !sumOk) return;
     onSave({
       id: f.id, vacationId: vac.id, description: f.description.trim(),
-      total: Math.round(Number(f.total) * 100) / 100,
-      payerId: f.payerId, participants: f.participants, settled: f.settled,
+      total,
+      payerId: f.payerId, participants, settled: f.settled,
       sourceKey: purchase?.sourceKey || prefill?.key || null,
       split: f.split,
-      shares: f.split === "custom"
+      shares: f.split === "custom" && !usingParcels
         ? Object.fromEntries(f.participants.map((id) => [id, Math.round((Number(f.shares[id]) || 0) * 100) / 100]))
         : {},
+      parcels: usingParcels
+        ? f.parcels.map((pc) => ({ id: pc.id || uid(), name: String(pc.name || "").trim(), price: Math.round(Number(pc.price) * 100) / 100, members: pc.members || [] }))
+        : [],
     });
   }
 
@@ -1458,7 +1540,11 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, isAdmin, myMemb
       {eligible.length === 0 && <p className="hint">Ainda não há participantes confirmados — confirma a participação no Resumo primeiro.</p>}
       <label>Descrição<input value={f.description} onChange={(e) => set("description", e.target.value)} autoFocus placeholder="ex.: Voos Porto → Sarajevo" /></label>
       <div className="row">
-        <label>Valor total (€)<input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} /></label>
+        <label>Valor total (€)
+          {usingParcels
+            ? <input value={parcelsSum > 0 ? parcelsSum.toFixed(2).replace(".", ",") : ""} placeholder="soma das parcelas" disabled title="Calculado automaticamente: soma das parcelas" />
+            : <input type="number" min="0" step="0.01" value={f.total} onChange={(e) => set("total", e.target.value)} />}
+        </label>
         <label>Quem pagou (a quem devem)
           {isAdmin ? (
             <select value={f.payerId} onChange={(e) => set("payerId", e.target.value)}>
@@ -1476,27 +1562,59 @@ function VacPurchaseFormModal({ purchase, vac, members, prefill, isAdmin, myMemb
           <button type="button" className={f.split === "custom" ? "on" : ""} onClick={() => set("split", "custom")}>Só pago o que usufruo</button>
         </div>
       </label>
-      <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
-      <div className="pill-row">
-        {eligible.map((m) => (
-          <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
-        ))}
-      </div>
-      {f.split === "custom" && (
+      {usingParcels ? (
         <>
-          <div className="shares-grid">
-            {f.participants.map((id) => {
-              const m = members.find((x) => x.id === id);
-              return (
-                <label key={id}>{m?.name || id} (€)
-                  <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
-                    onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
-                </label>
-              );
-            })}
+          <h4>Parcelas{parcelsSum > 0 ? ` · total ${eur(parcelsSum)}` : ""}</h4>
+          {f.parcels.map((pc, i) => (
+            <div key={pc.id || i} className="parcel">
+              <div className="row" style={{ alignItems: "flex-end" }}>
+                <label>Parcela<input placeholder="ex.: Frango" value={pc.name} onChange={(e) => setParcel(i, "name", e.target.value)} /></label>
+                <label>Preço (€)<input type="number" min="0" step="0.01" value={pc.price} onChange={(e) => setParcel(i, "price", e.target.value)} /></label>
+                <button type="button" className="iconbtn" title="Remover parcela" onClick={() => rmParcel(i)}>✕</button>
+              </div>
+              <div className="pill-row">
+                {eligible.map((m) => {
+                  const on = (pc.members || []).includes(m.id);
+                  return (
+                    <button key={m.id} type="button" className={`pill ${on ? "on" : ""}`} onClick={() => toggleParcelMember(i, m.id)}>
+                      {m.name}{on && pc.members.length ? ` · ${eur((Number(pc.price) || 0) / pc.members.length)}` : ""}
+                    </button>
+                  );
+                })}
+              </div>
+              {!(pc.members || []).length && <p className="hint" style={{ margin: "4px 0 0" }}>Sem membros associados — fica «por atribuir» (pode preencher-se mais tarde).</p>}
+            </div>
+          ))}
+          <button type="button" className="btn ghost small" onClick={addParcel}>+ Parcela</button>
+          {f.parcels.length === 0 && <p className="hint">Adiciona parcelas (ex.: Jantar em Mostar 60€) e associa os membros de cada uma.</p>}
+          {f.parcels.length > 0 && !parcelsOk && <p className="err">Todas as parcelas precisam de preço maior que 0.</p>}
+        </>
+      ) : (
+        <>
+          <h4>Dividir por {f.participants.length} pessoa(s){f.split === "equal" && share > 0 ? ` · ${eur(share)} cada` : ""}</h4>
+          {legacyShares && f.split === "custom" && <p className="hint" style={{ marginTop: 0 }}>Compra antiga com valores manuais por membro — mantém-se assim; compras novas usam parcelas.</p>}
+          <div className="pill-row">
+            {eligible.map((m) => (
+              <button key={m.id} type="button" className={`pill ${f.participants.includes(m.id) ? "on" : ""}`} onClick={() => toggleP(m.id)}>{m.name}</button>
+            ))}
           </div>
-          {!sumOk && (
-            <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+          {f.split === "custom" && (
+            <>
+              <div className="shares-grid">
+                {f.participants.map((id) => {
+                  const m = members.find((x) => x.id === id);
+                  return (
+                    <label key={id}>{m?.name || id} (€)
+                      <input type="number" min="0" step="0.01" value={f.shares[id] ?? ""}
+                        onChange={(e) => setF((o) => ({ ...o, shares: { ...o.shares, [id]: e.target.value } }))} />
+                    </label>
+                  );
+                })}
+              </div>
+              {!sumOk && (
+                <p className="err">A soma dos valores por membro ({eur(sumShares)}) tem de igualar o total da compra ({eur(Number(f.total) || 0)}).</p>
+              )}
+            </>
           )}
         </>
       )}

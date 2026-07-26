@@ -14,6 +14,23 @@ const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} 
 const hoje = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Lisbon" }).format(new Date());
 const diasDesde = (iso) => Math.round((new Date(hoje) - new Date(iso)) / 86400000);
 
+/* quota de um membro numa compra (com suporte a parcelas) */
+function shareOf(pu, mid) {
+  if (pu.split === "custom") {
+    if (pu.parcels?.length) {
+      let t = 0;
+      for (const pc of pu.parcels) {
+        const ms = pc.members || [];
+        if (ms.length && ms.includes(mid)) t += (Number(pc.price) || 0) / ms.length;
+      }
+      return Math.round(t * 100) / 100;
+    }
+    return Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100;
+  }
+  const parts = pu.participants || [];
+  return parts.length ? Math.round((Number(pu.total) / parts.length) * 100) / 100 : 0;
+}
+
 async function get(url) {
   const r = await fetch(url, { headers: H });
   if (!r.ok) { console.error("Erro Supabase:", r.status, await r.text()); process.exit(1); }
@@ -48,9 +65,7 @@ for (const pu of purchases) {
   if (!parts.length) continue;
   for (const mid of parts) {
     if (mid === pu.payer_member_id || pu.settled?.[mid] || pu.claimed?.[mid]) continue; // claimed: aguarda confirmação do credor, não chatear o devedor
-    const share = pu.split === "custom"
-      ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
-      : Math.round((Number(pu.total) / parts.length) * 100) / 100;
+    const share = shareOf(pu, mid);
     if (share <= 0) continue;
     (debts[mid] = debts[mid] || []).push({
       eventName: ev.name, desc: pu.description, amount: share,
@@ -71,9 +86,7 @@ for (const pu of vacPurchases) {
   if (!parts.length) continue;
   for (const mid of parts) {
     if (mid === pu.payer_member_id || pu.settled?.[mid] || pu.claimed?.[mid]) continue; // claimed: aguarda confirmação do credor, não chatear o devedor
-    const share = pu.split === "custom"
-      ? Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100
-      : Math.round((Number(pu.total) / parts.length) * 100) / 100;
+    const share = shareOf(pu, mid);
     if (share <= 0) continue;
     (debts[mid] = debts[mid] || []).push({
       eventName: `Férias: ${vac.name}`, desc: pu.description, amount: share,
