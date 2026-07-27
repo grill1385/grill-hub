@@ -53,9 +53,14 @@ const fromPurchase = (p) => ({
   split: p.split || "equal", shares: p.shares || {}, parcels: p.parcels || [],
 });
 
+const toWish = (r) => ({
+  id: r.id, memberId: r.member_id, fromMemberId: r.from_member_id,
+  year: r.year, message: r.message || "", createdAt: r.created_at || null,
+});
+
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins, purchases, profiles, places] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles, places, wishes] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
@@ -63,6 +68,7 @@ export const api = {
       supabase.from("purchases").select("*"),
       supabase.from("profiles").select("*"),
       supabase.from("event_places").select("*"),
+      supabase.from("birthday_wishes").select("*"),
     ]);
     for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
@@ -74,6 +80,8 @@ export const api = {
       profiles: profiles.error ? [] : profiles.data,
       /* tolerante: se setup-eventos-locais.sql ainda não correu, segue sem locais */
       places: places.error ? [] : places.data.map((r) => ({ id: r.id, name: r.name, url: r.url, createdAt: r.created_at })),
+      /* tolerante: se setup-aniversarios.sql ainda não correu, segue sem desejos */
+      wishes: wishes.error ? [] : wishes.data.map(toWish),
     };
   },
   async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },
@@ -112,6 +120,14 @@ export const api = {
   },
   async savePurchase(pu) { const { error } = await supabase.from("purchases").upsert(fromPurchase(pu)); if (error) throw error; },
   /* devedor marca/desmarca "já paguei" (ver setup-contas-pagamentos.sql) */
+  /* desejo de parabéns (1 por aniversariante/ano; ver setup-aniversarios.sql) */
+  async saveBirthdayWish(w) {
+    const { error } = await supabase.from("birthday_wishes").upsert(
+      { id: w.id, member_id: w.memberId, from_member_id: w.fromMemberId, year: w.year, message: w.message || null },
+      { onConflict: "member_id,from_member_id,year" }
+    );
+    if (error) throw error;
+  },
   async claimPayment(purchaseId, value) {
     const { error } = await supabase.rpc("claim_my_payment", { p_purchase_id: purchaseId, p_value: value });
     if (error) throw error;

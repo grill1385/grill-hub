@@ -13,7 +13,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`, `resolve-maps`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
-- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`, `setup-contas-parcelas.sql`.
+- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`, `setup-contas-parcelas.sql`, `setup-aniversarios.sql`.
 - GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos — só a quem ainda não confirmou presença + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
@@ -42,6 +42,11 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Devedor marca "já paguei" → `claimed[mid]=true` via RPCs `claim_my_payment`/`claim_my_vacation_payment` (só participantes, bloqueado se já saldado). `claimed` fica FORA de fromPurchase/fromVPurchase (só muda via RPC, para upserts não pisarem). Pill tracejada dourada "pagou? por confirmar" (.pill.claim).
 - Credor (ou admin) confirma → settled (upsert normal). Devedor com claimed deixa de ser notificado (Home, mailto de lembrete e send-debt-reminders.mjs ignoram claimed); na Home do credor aparece "Pagamentos a confirmar" (secção no painel Contas, botão Confirmar).
 
+## Aniversários (Home, jul 2026)
+
+- Tabela `birthday_wishes` (member_id = aniversariante, from_member_id, year, message; unique por trio; RLS: leitura pública, membro escreve os seus). Carregada tolerantemente no api.loadAll (`wishes`).
+- HomeTab (painel Contas, no fim): banner «Feliz aniversário» com emojis para o próprio no dia (por mês-dia de birth_date) + desejos recebidos do ano; para os outros membros: lembrete no dia com botão «Desejar parabéns» (modal com mensagem opcional, upsert 1/ano) e lembrete 1 semana antes (sem botão).
+
 ## Estado atual / pendentes
 
 - Aba Férias publicada (commit 2ddb592, jul 2026). Pré-requisito: `setup-ferias.sql` corrido no SQL Editor — confirmar com o David se já foi feito.
@@ -50,6 +55,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Contas das férias (jul 2026). Pré-requisito: `setup-ferias-contas.sql` corrido no SQL Editor — confirmar com o David.
 - Fluxo "já paguei"→confirmação + compras por membros (jul 2026). Pré-requisito: `setup-contas-pagamentos.sql` corrido no SQL Editor — confirmar com o David.
 - Parcelas + importação Excel de compras (jul 2026). Pré-requisito: `setup-contas-parcelas.sql` corrido no SQL Editor — confirmar com o David.
+- Aniversários na Home (jul 2026). Pré-requisito: `setup-aniversarios.sql` corrido no SQL Editor — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Convenções

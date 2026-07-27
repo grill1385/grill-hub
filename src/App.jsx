@@ -211,7 +211,7 @@ export default function App() {
         setData(await api.loadAll());
       } catch (e) {
         console.error(e);
-        setData({ admins: [], members: [], events: [], roles: [], purchases: [], profiles: [] });
+        setData({ admins: [], members: [], events: [], roles: [], purchases: [], profiles: [], wishes: [] });
       }
       setLoading(false);
     })();
@@ -534,6 +534,18 @@ export default function App() {
     } catch { showToast("Não foi possível eliminar a compra."); }
   }
 
+  async function sendBirthdayWish(memberId, message) {
+    if (!myMember) return;
+    const w = { id: uid(), memberId, fromMemberId: myMember.id, year: new Date().getFullYear(), message: (message || "").trim() };
+    try {
+      await api.saveBirthdayWish(w);
+      const wishes = [...(data.wishes || []).filter((x) => !(x.memberId === memberId && x.fromMemberId === myMember.id && x.year === w.year)), w];
+      setData({ ...data, wishes });
+      setModal(null);
+      showToast("Parabéns enviados! 🎉");
+    } catch { showToast("Não foi possível enviar os parabéns."); }
+  }
+
   async function importPurchases(evId, list) {
     try {
       for (const pu of list) await api.savePurchase(pu);
@@ -671,6 +683,8 @@ export default function App() {
               onMember={(id) => setModal({ type: "memberDetail", id })}
               onConfirm={toggleConfirmation}
               onConfirmPayment={(pu, mid) => toggleSettled(pu, mid)}
+              wishes={data.wishes || []}
+              onWish={(mid) => setModal({ type: "birthdayWish", memberId: mid })}
               onGoScoreboard={() => setTab("scoreboard")} />
           )}
 
@@ -956,6 +970,12 @@ export default function App() {
           onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
       })()}
 
+      {modal?.type === "birthdayWish" && (() => {
+        const mb = data.members.find((m) => m.id === modal.memberId);
+        if (!mb) return null;
+        return <BirthdayWishModal member={mb} onSend={(msg) => sendBirthdayWish(mb.id, msg)} onClose={() => setModal(null)} />;
+      })()}
+
       {modal?.type === "importPurchases" && (() => {
         const ev = data.events.find((e) => e.id === modal.eventId);
         if (!ev) return null;
@@ -978,7 +998,17 @@ export default function App() {
    Componentes
    ============================================================ */
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onGoScoreboard }) {
+  /* aniversários: hoje e daqui a 1 semana (por mês-dia da data de nascimento) */
+  const bdayYear = new Date().getFullYear();
+  const todayMD = todayISO().slice(5);
+  const in7MD = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return d.toISOString().slice(5, 10); })();
+  const bdayToday = members.filter((m) => m.birthDate && m.birthDate.slice(5) === todayMD);
+  const bdaySoon = members.filter((m) => m.birthDate && m.birthDate.slice(5) === in7MD);
+  const isMyBday = !!myMember && bdayToday.some((m) => m.id === myMember.id);
+  const myBdayWishes = myMember
+    ? (wishes || []).filter((w) => w.memberId === myMember.id && w.year === bdayYear && w.fromMemberId !== myMember.id)
+    : [];
   /* net a pagar por credor, já compensado e somado em todos os eventos */
   const myNet = useMemo(() => {
     if (!myMember) return { pay: [], total: 0 };
@@ -1118,6 +1148,38 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                       <span className="mini-date">{c.desc}</span>
                       <span className="debt-line"><b>{c.name}</b> diz que te pagou <b>{eur(c.amount)}</b></span>
                       <button className="pill" onClick={() => onConfirmPayment(c.pu, c.mid)}>Confirmar</button>
+                    </div>
+                  ))}
+                </>
+              )}
+              {isMyBday && (
+                <div className="bday-banner">
+                  <h4 style={{ margin: 0 }}>🎂🎉 Feliz aniversário, {myMember.name}! 🥳🔥🍖</h4>
+                  <p className="hint" style={{ margin: "4px 0 0" }}>O Grill deseja-te um dia em grande — a brasa hoje é por tua conta… de idade! 😄</p>
+                  {myBdayWishes.map((w) => (
+                    <div key={w.id} className="bday-wish">
+                      🎈 <b>{members.find((m) => m.id === w.fromMemberId)?.name || "?"}</b> deseja-te parabéns{w.message ? <>: <em>«{w.message}»</em></> : "! 🎉"}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {myMember && (bdayToday.some((m) => m.id !== myMember.id) || bdaySoon.some((m) => m.id !== myMember.id)) && (
+                <>
+                  <h4>Aniversários 🎂</h4>
+                  {bdayToday.filter((m) => m.id !== myMember.id).map((m) => {
+                    const wished = (wishes || []).some((w) => w.memberId === m.id && w.fromMemberId === myMember.id && w.year === bdayYear);
+                    return (
+                      <div key={m.id} className="todo-item bday-note">
+                        <span>🎉 Hoje é o aniversário de <b>{m.name}</b>!</span>
+                        {wished
+                          ? <span className="hint" style={{ margin: 0 }}>Parabéns enviados ✓</span>
+                          : <button className="pill" onClick={() => onWish(m.id)}>Desejar parabéns 🎈</button>}
+                      </div>
+                    );
+                  })}
+                  {bdaySoon.filter((m) => m.id !== myMember.id).map((m) => (
+                    <div key={m.id} className="todo-item bday-note">
+                      <span>🗓️ O aniversário de <b>{m.name}</b> é daqui a uma semana ({fmtDate(m.birthDate).slice(0, 5)}) — vai aquecendo os parabéns! 🔥</span>
                     </div>
                   ))}
                 </>
@@ -1747,6 +1809,22 @@ function ImportEventsModal({ members, onImport, onClose }) {
           onClick={async () => { setBusy(true); await onImport(preview.events, createMissing ? preview.newNames : []); setBusy(false); }}>
           {busy ? "A importar…" : "Importar"}
         </button>
+      </div>
+    </Modal>
+  );
+}
+
+function BirthdayWishModal({ member, onSend, onClose }) {
+  const [msg, setMsg] = useState("");
+  return (
+    <Modal title={`Desejar parabéns a ${member.name} 🎂`} onClose={onClose}>
+      <p className="hint" style={{ marginTop: 0 }}>A tua mensagem aparece na homepage de {member.name} hoje.</p>
+      <label>Mensagem personalizada (opcional)
+        <textarea rows={3} maxLength={280} placeholder="ex.: Parabéns, lenda! Que a brasa nunca te falte 🔥"
+          value={msg} onChange={(e) => setMsg(e.target.value)} autoFocus />
+      </label>
+      <div className="actions">
+        <button className="btn ember" onClick={() => onSend(msg)}>Enviar parabéns 🎈</button>
       </div>
     </Modal>
   );
@@ -2471,6 +2549,11 @@ function Style() {
       .parcel-line { word-break:break-word; }
       .debt-line { font-size:12.5px; color:var(--muted); }
       .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
+      .bday-banner { margin-top:12px; padding:12px 14px; border-radius:12px; border:1px solid var(--gold);
+        background:linear-gradient(135deg, rgba(245,184,104,.14), rgba(255,122,61,.10)); }
+      .bday-banner h4 { color:var(--gold); }
+      .bday-wish { margin-top:8px; padding:8px 10px; border-radius:8px; background:rgba(255,255,255,.05); font-size:13.5px; line-height:1.45; }
+      .bday-note span:first-child { flex:1; }
       .debt-line b { color:var(--ember); }
 
       @media (max-width: 760px) {
