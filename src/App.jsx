@@ -2689,9 +2689,10 @@ function Style() {
       .debt-line { font-size:12.5px; color:var(--muted); }
       .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
       .debt-age { color:var(--muted); font-weight:400; }
-      .debt-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin:6px 0; }
-      .debt-cell { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:8px 10px;
-        display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .debt-grid { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:8px; margin:6px 0; }
+      @media (max-width: 760px) { .debt-grid { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+      .debt-cell { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:7px 9px;
+        display:flex; flex-direction:column; gap:2px; min-width:0; font-size:12.5px; }
       .debt-cell-name { font-weight:700; color:var(--ember); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
       .debt-cell .debt-age { font-size:11.5px; }
       .debt-badge { position:relative; display:inline-flex; width:18px; height:18px; border-radius:50%; align-items:center;
