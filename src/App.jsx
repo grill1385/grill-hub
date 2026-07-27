@@ -20,6 +20,8 @@ const uid = () => Math.random().toString(36).slice(2, 9) + Date.now().toString(3
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 
+const daysSince = (iso) => (iso ? Math.max(0, Math.round((new Date(todayISO()) - new Date(iso)) / 86400000)) : 0);
+
 function fmtDate(iso) {
   if (!iso) return "—";
   const [y, m, d] = iso.split("-");
@@ -76,28 +78,34 @@ const shareOf = (pu, mid) => {
    Se A deve a B e B deve a A, fica só a diferença, na direção certa —
    quem, no líquido, passa a receber é considerado saldado.
    Não reencaminha dívidas por terceiros (mantém-se a pagar a quem pagou). */
-function pairwiseNet(purchases) {
-  const owe = {}; // owe[devedor][credor] = valor
+function pairwiseNet(purchases, events) {
+  const owe = {}; // owe[devedor][credor] = { amount, items: [{eventName, desc, amount, date}] }
   (purchases || []).forEach((pu) => {
     const payer = pu.payerId;
     if (!payer) return;
+    const ev = (events || []).find((e) => e.id === pu.eventId);
     (pu.participants || []).forEach((mid) => {
       if (mid === payer) return;
       if (pu.settled?.[mid] || pu.claimed?.[mid]) return;
       const a = shareOf(pu, mid);
       if (a <= 0) return;
       owe[mid] = owe[mid] || {};
-      owe[mid][payer] = (owe[mid][payer] || 0) + a;
+      const slot = (owe[mid][payer] = owe[mid][payer] || { amount: 0, items: [] });
+      slot.amount += a;
+      slot.items.push({ eventName: ev?.name || "?", desc: pu.description, amount: a, date: ev ? (ev.dateEnd || ev.dateStart) : null });
     });
   });
   const ids = [...new Set([...Object.keys(owe), ...Object.values(owe).flatMap((o) => Object.keys(o))])];
-  const out = []; // {from, to, amount}
+  const out = []; // {from, to, amount, items (dívidas do devedor), offsets (a abater), since}
   for (let i = 0; i < ids.length; i++) {
     for (let j = i + 1; j < ids.length; j++) {
       const x = ids[i], y = ids[j];
-      const net = Math.round(((owe[x]?.[y] || 0) - (owe[y]?.[x] || 0)) * 100) / 100;
-      if (net > 0) out.push({ from: x, to: y, amount: net });
-      else if (net < 0) out.push({ from: y, to: x, amount: -net });
+      const xy = owe[x]?.[y], yx = owe[y]?.[x];
+      const net = Math.round((((xy?.amount) || 0) - ((yx?.amount) || 0)) * 100) / 100;
+      if (net === 0) continue;
+      const [from, to, fit, oit] = net > 0 ? [x, y, xy?.items || [], yx?.items || []] : [y, x, yx?.items || [], xy?.items || []];
+      const dates = fit.map((it) => it.date).filter(Boolean).sort();
+      out.push({ from, to, amount: Math.abs(net), items: fit, offsets: oit, since: dates[0] || null });
     }
   }
   return out;
@@ -327,6 +335,19 @@ export default function App() {
     if (filterMembers.length) list = list.filter((e) => filterMembers.every((id) => e.presences?.[id]));
     return eventSort === "desc" ? [...list].reverse() : list;
   }, [sortedEventsAsc, filterYear, filterMembers, eventSort]);
+
+  /* dívidas líquidas por membro (públicas), com idade — para o badge do scoreboard */
+  const debtMap = useMemo(() => {
+    if (!data) return {};
+    const map = {};
+    pairwiseNet(data.purchases, data.events).forEach((sm) => {
+      const days = daysSince(sm.since);
+      const rec = (map[sm.from] = map[sm.from] || { days: 0, pairs: [] });
+      rec.pairs.push({ to: sm.to, name: data.members.find((m) => m.id === sm.to)?.name || "?", amount: sm.amount, days });
+      rec.days = Math.max(rec.days, days);
+    });
+    return map;
+  }, [data]);
 
   const hierarchyTiers = useMemo(() => {
     if (!data?.roles.length) return [];
@@ -835,6 +856,7 @@ export default function App() {
                         <span className={`rank r${i + 1}`}>{i + 1}</span>
                         <span className="board-name">
                           {row.member.name}
+                          {debtMap[row.member.id]?.days >= 7 && <DebtBadge info={debtMap[row.member.id]} />}
                           {row.member.username && <span className="uname">@{row.member.username}</span>}
                         </span>
                         <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
@@ -1035,6 +1057,23 @@ export default function App() {
    Componentes
    ============================================================ */
 
+/* Badge público de dívidas antigas (7d amarelo, 15d laranja, 30d vermelho, 60d preto brilhante) */
+function DebtBadge({ info }) {
+  const d = info.days;
+  const tier = d >= 60 ? "t60" : d >= 30 ? "t30" : d >= 15 ? "t15" : "t7";
+  return (
+    <span className={`debt-badge ${tier}`} onClick={(e) => e.stopPropagation()} title="">
+      €
+      <span className="debt-tip">
+        <b>Contas por saldar há {info.days} dia{info.days === 1 ? "" : "s"} 💸</b>
+        {info.pairs.map((pr) => (
+          <span key={pr.to}>Deve <b>{eur(pr.amount)}</b> a {pr.name}{pr.days > 0 ? ` · há ${pr.days} dia${pr.days === 1 ? "" : "s"}` : ""}</span>
+        ))}
+      </span>
+    </span>
+  );
+}
+
 function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, onGoScoreboard }) {
   /* aniversários: hoje e daqui a 1 semana (por mês-dia da data de nascimento) */
   const bdayYear = new Date().getFullYear();
@@ -1046,16 +1085,37 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
   const myBdayWishes = myMember
     ? (wishes || []).filter((w) => w.memberId === myMember.id && w.year === bdayYear && w.fromMemberId !== myMember.id)
     : [];
-  /* net a pagar por credor, já compensado e somado em todos os eventos */
+  /* net por par, já compensado em todos os eventos: a pagar e a receber, com idade da dívida */
   const myNet = useMemo(() => {
-    if (!myMember) return { pay: [], total: 0 };
-    const pay = pairwiseNet(purchases)
-      .filter((sm) => sm.from === myMember.id)
-      .map((sm) => ({ to: members.find((m) => m.id === sm.to)?.name || "?", amount: sm.amount }))
-      .sort((a, b) => b.amount - a.amount);
+    if (!myMember) return { pay: [], receive: [], total: 0, receiveTotal: 0 };
+    const net = pairwiseNet(purchases, events);
+    const deco = (sm, otherId) => {
+      const m = members.find((x) => x.id === otherId);
+      return { ...sm, otherId, name: m?.name || "?", email: m?.email || null, days: daysSince(sm.since) };
+    };
+    const pay = net.filter((sm) => sm.from === myMember.id).map((sm) => deco(sm, sm.to)).sort((a, b) => b.amount - a.amount);
+    const receive = net.filter((sm) => sm.to === myMember.id).map((sm) => deco(sm, sm.from)).sort((a, b) => b.amount - a.amount);
     const total = Math.round(pay.reduce((acc, x) => acc + x.amount, 0) * 100) / 100;
-    return { pay, total };
-  }, [purchases, members, myMember]);
+    const receiveTotal = Math.round(receive.reduce((acc, x) => acc + x.amount, 0) * 100) / 100;
+    return { pay, receive, total, receiveTotal };
+  }, [purchases, events, members, myMember]);
+
+  /* lembrete por email aos meus devedores, com descritivo por evento/compra e compensações */
+  const reminderHref = useMemo(() => {
+    if (!myMember) return null;
+    const withEmail = myNet.receive.filter((d) => d.email);
+    if (!withEmail.length) return null;
+    const body = withEmail.map((d) => {
+      const lines = [`${d.name} — líquido a pagar a ${myMember.name}: ${eur(d.amount)}${d.days > 0 ? ` (há ${d.days} dia${d.days === 1 ? "" : "s"})` : ""}`];
+      d.items.forEach((it) => lines.push(`  • ${it.eventName} — ${it.desc}: ${eur(it.amount)}${it.date ? ` (${fmtDate(it.date)})` : ""}`));
+      if (d.offsets.length) {
+        lines.push(`  A abater (o que ${myMember.name} deve a ${d.name} de outros eventos):`);
+        d.offsets.forEach((it) => lines.push(`  − ${it.eventName} — ${it.desc}: ${eur(it.amount)}`));
+      }
+      return lines.join("\n");
+    }).join("\n\n");
+    return `mailto:${withEmail.map((d) => d.email).join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar com ${myMember.name}`)}&body=${encodeURIComponent(`Olá! Ficam as contas por saldar com ${myMember.name} (valores já compensados entre eventos):\n\n${body}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`;
+  }, [myMember, myNet]);
   /* pagamentos que dizem ter-me feito (sou o credor) e faltam confirmar */
   const toConfirm = useMemo(() => {
     if (!myMember) return [];
@@ -1167,14 +1227,32 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
-              {myMember && myNet.pay.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
+              {myMember && myNet.pay.length === 0 && myNet.receive.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
               {myMember && myNet.pay.map((d) => (
-                <div key={d.to} className="todo-item">
-                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.to}</b></span>
+                <div key={d.otherId} className="todo-item">
+                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.name}</b>{d.days > 0 ? <span className="debt-age"> · há {d.days} dia{d.days === 1 ? "" : "s"}</span> : null}</span>
                 </div>
               ))}
               {myMember && myNet.pay.length > 1 && (
                 <p className="hint" style={{ margin: "2px 0 0" }}>Total a pagar (compensado): <b>{eur(myNet.total)}</b></p>
+              )}
+              {myMember && myNet.receive.length > 0 && (
+                <>
+                  <h4>Contas a receber 💰</h4>
+                  {myNet.receive.map((d) => (
+                    <div key={d.otherId} className="todo-item">
+                      <span className="debt-line"><b>{d.name}</b> deve-te <b>{eur(d.amount)}</b>{d.days > 0 ? <span className="debt-age"> · há {d.days} dia{d.days === 1 ? "" : "s"}</span> : null}</span>
+                    </div>
+                  ))}
+                  {myNet.receive.length > 1 && (
+                    <p className="hint" style={{ margin: "2px 0 0" }}>Total a receber (compensado): <b>{eur(myNet.receiveTotal)}</b></p>
+                  )}
+                  {reminderHref && (
+                    <a className="btn ghost small" href={reminderHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center", marginTop: 8 }}>
+                      Enviar lembrete por email 📧
+                    </a>
+                  )}
+                </>
               )}
               {myMember && toConfirm.length > 0 && (
                 <>
@@ -2600,6 +2678,19 @@ function Style() {
       .parcel-line { word-break:break-word; }
       .debt-line { font-size:12.5px; color:var(--muted); }
       .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
+      .debt-age { color:var(--muted); font-weight:400; }
+      .debt-badge { position:relative; display:inline-flex; width:18px; height:18px; border-radius:50%; align-items:center;
+        justify-content:center; font-size:11px; font-weight:800; margin-left:7px; cursor:help; color:#1A0F08; vertical-align:middle; }
+      .debt-badge.t7 { background:#F5B841; }
+      .debt-badge.t15 { background:#FF7A3D; }
+      .debt-badge.t30 { background:#E23B3B; color:#fff; }
+      .debt-badge.t60 { background:#0A0A0A; color:#F5B841; border:1px solid #F5B841;
+        box-shadow:0 0 8px rgba(245,184,104,.85), 0 0 16px rgba(245,184,104,.4); animation:debt-glow 1.6s ease-in-out infinite alternate; }
+      @keyframes debt-glow { from { box-shadow:0 0 6px rgba(245,184,104,.6); } to { box-shadow:0 0 14px rgba(245,184,104,1), 0 0 24px rgba(245,184,104,.5); } }
+      .debt-tip { display:none; position:absolute; top:22px; left:50%; transform:translateX(-50%); z-index:30; min-width:230px;
+        background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 12px; box-shadow:0 12px 30px rgba(0,0,0,.45);
+        font-size:12.5px; font-weight:400; color:var(--text); text-align:left; flex-direction:column; gap:4px; white-space:nowrap; }
+      .debt-badge:hover .debt-tip { display:flex; }
       .bday-banner { margin-top:12px; padding:12px 14px; border-radius:12px; border:1px solid var(--gold);
         background:linear-gradient(135deg, rgba(245,184,104,.14), rgba(255,122,61,.10)); }
       .bday-banner h4 { color:var(--gold); }
