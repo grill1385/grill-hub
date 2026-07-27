@@ -245,7 +245,7 @@ export default function App() {
         setData(await api.loadAll());
       } catch (e) {
         console.error(e);
-        setData({ admins: [], members: [], events: [], roles: [], purchases: [], profiles: [], wishes: [] });
+        setData({ admins: [], members: [], events: [], roles: [], purchases: [], profiles: [], wishes: [], shames: [] });
       }
       setLoading(false);
     })();
@@ -603,6 +603,32 @@ export default function App() {
     } catch { showToast("Email falhou — a função birthday-wish está configurada no Supabase?"); }
   }
 
+  async function shameMember(targetId) {
+    if (!myMember || myMember.id === targetId) return;
+    const info = debtMap[targetId];
+    if (!info) return;
+    const sh = {
+      id: uid(), memberId: targetId, fromMemberId: myMember.id,
+      amount: Math.round(info.pairs.reduce((acc, pr) => acc + pr.amount, 0) * 100) / 100,
+      creditors: info.pairs.map((pr) => pr.name),
+    };
+    try {
+      await api.saveShame(sh);
+      setData({ ...data, shames: [...(data.shames || []), { ...sh, cleared: false }] });
+      showToast("Vergonha lançada! 😈");
+    } catch (e) {
+      if (e?.code === "23505") showToast("Calma — já envergonhaste esse membro hoje 😄");
+      else showToast("Não foi possível envergonhar (setup-vergonha.sql já correu?)");
+    }
+  }
+
+  async function clearShame(id) {
+    try {
+      await api.clearShame(id);
+      setData({ ...data, shames: (data.shames || []).map((x) => (x.id === id ? { ...x, cleared: true } : x)) });
+    } catch { showToast("Não foi possível limpar."); }
+  }
+
   async function importPurchases(evId, list) {
     try {
       for (const pu of list) await api.savePurchase(pu);
@@ -743,6 +769,9 @@ export default function App() {
               wishes={data.wishes || []}
               onWish={(mid) => setModal({ type: "birthdayWish", memberId: mid })}
               onEmailWish={emailBirthdayWish}
+              shames={data.shames || []}
+              onClearShame={clearShame}
+              onDebtDetail={(pair, direction) => setModal({ type: "debtDetail", pair, direction })}
               onGoScoreboard={() => setTab("scoreboard")} />
           )}
 
@@ -856,7 +885,11 @@ export default function App() {
                         <span className={`rank r${i + 1}`}>{i + 1}</span>
                         <span className="board-name">
                           {row.member.name}
-                          {debtMap[row.member.id]?.days >= 7 && <DebtBadge info={debtMap[row.member.id]} />}
+                          {debtMap[row.member.id]?.days >= 7 && (
+                            <DebtBadge info={debtMap[row.member.id]}
+                              canShame={!!myMember && myMember.id !== row.member.id}
+                              onShame={() => shameMember(row.member.id)} />
+                          )}
                           {row.member.username && <span className="uname">@{row.member.username}</span>}
                         </span>
                         <span className="board-bar"><i style={{ width: `${row.pct}%` }} /></span>
@@ -1029,6 +1062,10 @@ export default function App() {
           onClose={() => setModal({ type: "eventDetail", id: ev.id })} />;
       })()}
 
+      {modal?.type === "debtDetail" && modal.pair && (
+        <DebtDetailModal pair={modal.pair} direction={modal.direction} myName={myMember?.name} onClose={() => setModal(null)} />
+      )}
+
       {modal?.type === "birthdayWish" && (() => {
         const mb = data.members.find((m) => m.id === modal.memberId);
         if (!mb) return null;
@@ -1058,7 +1095,7 @@ export default function App() {
    ============================================================ */
 
 /* Badge público de dívidas antigas (7d amarelo, 15d laranja, 30d vermelho, 60d preto brilhante) */
-function DebtBadge({ info }) {
+function DebtBadge({ info, canShame, onShame }) {
   const d = info.days;
   const tier = d >= 60 ? "t60" : d >= 30 ? "t30" : d >= 15 ? "t15" : "t7";
   return (
@@ -1069,12 +1106,53 @@ function DebtBadge({ info }) {
         {info.pairs.map((pr) => (
           <span key={pr.to}>Deve <b>{eur(pr.amount)}</b> a {pr.name}{pr.days > 0 ? ` · há ${pr.days} dia${pr.days === 1 ? "" : "s"}` : ""}</span>
         ))}
+        {canShame && (
+          <span className="pill shame-btn" role="button"
+            onClick={(e) => { e.stopPropagation(); onShame(); }}>
+            Envergonha 😳
+          </span>
+        )}
       </span>
     </span>
   );
 }
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, onGoScoreboard }) {
+/* Sumário do líquido entre mim e outro membro, evento a evento */
+function DebtDetailModal({ pair, direction, myName, onClose }) {
+  const gross = Math.round(pair.items.reduce((acc, it) => acc + it.amount, 0) * 100) / 100;
+  const offset = Math.round(pair.offsets.reduce((acc, it) => acc + it.amount, 0) * 100) / 100;
+  const title = direction === "pay" ? `Deves ${eur(pair.amount)} a ${pair.name}` : `${pair.name} deve-te ${eur(pair.amount)}`;
+  return (
+    <Modal title={title} onClose={onClose}>
+      <h4 style={{ marginTop: 0 }}>{direction === "pay" ? `O que deves a ${pair.name}` : `O que ${pair.name} te deve`} ({eur(gross)})</h4>
+      <div className="mini-list">
+        {pair.items.map((it, i) => (
+          <div key={i} className="mini-item" style={{ cursor: "default" }}>
+            <span>{it.eventName} — {it.desc}</span>
+            <span className="mini-date">{eur(it.amount)}{it.date ? ` · ${fmtDate(it.date)}` : ""}</span>
+          </div>
+        ))}
+      </div>
+      {pair.offsets.length > 0 && (
+        <>
+          <h4>A abater — {direction === "pay" ? `o que ${pair.name} te deve` : `o que deves a ${pair.name}`} ({eur(offset)})</h4>
+          <div className="mini-list">
+            {pair.offsets.map((it, i) => (
+              <div key={i} className="mini-item" style={{ cursor: "default" }}>
+                <span>{it.eventName} — {it.desc}</span>
+                <span className="mini-date">− {eur(it.amount)}{it.date ? ` · ${fmtDate(it.date)}` : ""}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <p className="hint"><b>Líquido: {eur(gross)} − {eur(offset)} = {eur(pair.amount)}</b>{direction === "pay" ? ` a pagar a ${pair.name}` : ` a receber de ${pair.name}`}.</p>
+    </Modal>
+  );
+}
+
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, shames, onClearShame, onDebtDetail, onGoScoreboard }) {
+  const myShames = myMember ? (shames || []).filter((sh) => sh.memberId === myMember.id && !sh.cleared) : [];
   /* aniversários: hoje e daqui a 1 semana (por mês-dia da data de nascimento) */
   const bdayYear = new Date().getFullYear();
   const todayMD = todayISO().slice(5);
@@ -1231,11 +1309,12 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
               {myMember && myNet.pay.length > 0 && (
                 <div className="debt-grid">
                   {myNet.pay.map((d) => (
-                    <div key={d.otherId} className="debt-cell">
+                    <button key={d.otherId} type="button" className="debt-cell" title="Ver detalhe por evento"
+                      onClick={() => onDebtDetail(d, "pay")}>
                       <span className="debt-cell-name">{d.name}</span>
                       <span className="debt-line">deves <b>{eur(d.amount)}</b></span>
                       {d.days > 0 && <span className="debt-age">há {d.days} dia{d.days === 1 ? "" : "s"}</span>}
-                    </div>
+                    </button>
                   ))}
                 </div>
               )}
@@ -1247,11 +1326,12 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                   <h4>Contas a receber 💰</h4>
                   <div className="debt-grid">
                     {myNet.receive.map((d) => (
-                      <div key={d.otherId} className="debt-cell">
+                      <button key={d.otherId} type="button" className="debt-cell" title="Ver detalhe por evento"
+                        onClick={() => onDebtDetail(d, "receive")}>
                         <span className="debt-cell-name">{d.name}</span>
                         <span className="debt-line">deve-te <b>{eur(d.amount)}</b></span>
                         {d.days > 0 && <span className="debt-age">há {d.days} dia{d.days === 1 ? "" : "s"}</span>}
-                      </div>
+                      </button>
                     ))}
                   </div>
                   {myNet.receive.length > 1 && (
@@ -1277,6 +1357,16 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                   ))}
                 </>
               )}
+              {myShames.map((sh) => (
+                <div key={sh.id} className="shame-note">
+                  <span>
+                    😳 <b>{members.find((m) => m.id === sh.fromMemberId)?.name || "?"}</b> disse-te para teres <em>vergonha</em> pela
+                    tua dívida{sh.amount != null ? <> de <b>{eur(sh.amount)}</b></> : null}
+                    {sh.creditors?.length ? <> a <b>{sh.creditors.join(", ")}</b></> : null}! 💸🙈
+                  </span>
+                  <button className="iconbtn" title="Limpar (até alguém te envergonhar de novo…)" onClick={() => onClearShame(sh.id)}>✕</button>
+                </div>
+              ))}
               {isMyBday && (
                 <div className="bday-banner">
                   <h4 style={{ margin: 0 }}>🎂🎉 Feliz aniversário, {myMember.name}! 🥳🔥🍖</h4>
@@ -2699,6 +2789,13 @@ function Style() {
       .debt-cell { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:7px 9px;
         display:flex; flex-direction:column; gap:2px; min-width:0; font-size:12.5px; }
       .debt-cell-name { font-weight:700; color:var(--ember); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      button.debt-cell { font:inherit; color:var(--text); text-align:left; cursor:pointer; transition:border-color .15s; }
+      button.debt-cell:hover { border-color:var(--ember); }
+      .shame-btn { margin-top:6px; align-self:flex-start; border-color:var(--ember); color:var(--ember); cursor:pointer; }
+      .shame-note { margin-top:12px; padding:10px 12px; border-radius:10px; border:1px solid #E23B3B;
+        background:rgba(226,59,59,.10); display:flex; align-items:flex-start; gap:8px; font-size:13.5px; line-height:1.5; }
+      .shame-note span:first-child { flex:1; }
+      .shame-note em { color:#FF8A5C; font-weight:700; }
       .debt-cell .debt-age { font-size:11.5px; }
       .debt-badge { position:relative; display:inline-flex; width:18px; height:18px; border-radius:50%; align-items:center;
         justify-content:center; font-size:11px; font-weight:800; margin-left:7px; cursor:help; color:#1A0F08; vertical-align:middle; }

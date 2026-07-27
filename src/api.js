@@ -53,6 +53,11 @@ const fromPurchase = (p) => ({
   split: p.split || "equal", shares: p.shares || {}, parcels: p.parcels || [],
 });
 
+const toShame = (r) => ({
+  id: r.id, memberId: r.member_id, fromMemberId: r.from_member_id,
+  amount: r.amount == null ? null : Number(r.amount), creditors: r.creditors || [],
+  day: r.day, cleared: !!r.cleared, createdAt: r.created_at || null,
+});
 const toWish = (r) => ({
   id: r.id, memberId: r.member_id, fromMemberId: r.from_member_id,
   year: r.year, message: r.message || "", emailedAt: r.emailed_at || null, createdAt: r.created_at || null,
@@ -60,7 +65,7 @@ const toWish = (r) => ({
 
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins, purchases, profiles, places, wishes] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles, places, wishes, shames] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
@@ -69,6 +74,7 @@ export const api = {
       supabase.from("profiles").select("*"),
       supabase.from("event_places").select("*"),
       supabase.from("birthday_wishes").select("*"),
+      supabase.from("debt_shames").select("*"),
     ]);
     for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
@@ -82,6 +88,8 @@ export const api = {
       places: places.error ? [] : places.data.map((r) => ({ id: r.id, name: r.name, url: r.url, createdAt: r.created_at })),
       /* tolerante: se setup-aniversarios.sql ainda não correu, segue sem desejos */
       wishes: wishes.error ? [] : wishes.data.map(toWish),
+      /* tolerante: se setup-vergonha.sql ainda não correu, segue sem vergonhas */
+      shames: shames.error ? [] : shames.data.map(toShame),
     };
   },
   async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },
@@ -119,6 +127,18 @@ export const api = {
     if (error) throw error;
   },
   async savePurchase(pu) { const { error } = await supabase.from("purchases").upsert(fromPurchase(pu)); if (error) throw error; },
+  /* envergonhar um devedor (1x/dia por par; ver setup-vergonha.sql) */
+  async saveShame(sh) {
+    const { error } = await supabase.from("debt_shames").insert({
+      id: sh.id, member_id: sh.memberId, from_member_id: sh.fromMemberId,
+      amount: sh.amount, creditors: sh.creditors,
+    });
+    if (error) throw error;
+  },
+  async clearShame(id) {
+    const { error } = await supabase.from("debt_shames").update({ cleared: true }).eq("id", id);
+    if (error) throw error;
+  },
   /* devedor marca/desmarca "já paguei" (ver setup-contas-pagamentos.sql) */
   /* desejo de parabéns (1 por aniversariante/ano; ver setup-aniversarios.sql) */
   async saveBirthdayWish(w) {
