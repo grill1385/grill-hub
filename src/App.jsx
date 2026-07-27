@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 
 /* ============================================================
    GRILLHUB
@@ -1097,12 +1097,18 @@ export default function App() {
 /* Badge público de dívidas antigas (7d amarelo, 15d laranja, 30d vermelho, 60d preto brilhante) */
 function DebtBadge({ info, canShame, onShame }) {
   const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!open) return;
+    const h = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener("click", h);
+    return () => document.removeEventListener("click", h);
+  }, [open]);
   const d = info.days;
   const tier = d >= 60 ? "t60" : d >= 30 ? "t30" : d >= 15 ? "t15" : "t7";
   return (
-    <span className={`debt-badge ${tier} ${open ? "open" : ""}`} title=""
-      onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
-      onMouseLeave={() => setOpen(false)}>
+    <span ref={ref} className={`debt-badge ${tier} ${open ? "open" : ""}`} title="Clica para fixar"
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }}>
       €
       <span className="debt-tip">
         <b>Contas por saldar há {info.days} dia{info.days === 1 ? "" : "s"} 💸</b>
