@@ -1191,12 +1191,12 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
 
   return (
     <section className="home2">
-      <div className="tl-labels">
+      <div className={`tl-labels tl-c${Math.min(3, centerEvs.length)}`}>
         <h4>{k === 0 ? "Últimos eventos" : `Linha temporal · ${k} para trás`}</h4>
         <h4>{k === 0 ? "Próximos eventos" : ""}</h4>
         <h4>{k === 0 ? "Por confirmar" : ""}</h4>
       </div>
-      <div className={`tl-row ${dir > 0 ? "slide-past" : dir < 0 ? "slide-future" : ""}`} key={`k${k}`}>
+      <div className={`tl-row tl-c${Math.min(3, centerEvs.length)} ${dir > 0 ? "slide-past" : dir < 0 ? "slide-future" : ""}`} key={`k${k}`}>
         <div className="tl-slot tl-left">
           {leftEv ? card(leftEv, 0, true) : <div className="tl-card empty-card"><p className="hint">Ainda sem eventos concluídos.</p></div>}
           <div className="tl-arrows">
@@ -2628,8 +2628,11 @@ function Style() {
       .content.wide-score { max-width:1240px; margin-inline:auto; }
       .home2 { width:100%; }
       .tl-labels, .tl-row { display:grid; grid-template-columns:1.05fr 2.55fr 1.55fr; gap:14px; }
+      .tl-labels.tl-c2, .tl-row.tl-c2 { grid-template-columns:1.05fr 1.75fr 2.35fr; }
+      .tl-labels.tl-c1, .tl-row.tl-c1 { grid-template-columns:1.05fr 0.95fr 3.15fr; }
+      .tl-labels.tl-c0, .tl-row.tl-c0 { grid-template-columns:1.05fr 0.9fr 3.2fr; }
       .tl-labels h4 { margin:0 0 10px; }
-      .tl-center { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
+      .tl-center { display:grid; grid-template-columns:repeat(auto-fit, minmax(0, 1fr)); gap:14px; }
       .tl-slot { min-width:0; }
       .tl-left { position:relative; display:flex; flex-direction:column; }
       .tl-card { background:linear-gradient(105deg, var(--surface) 20%, rgba(33,28,23,.45) 100%); border:1px solid var(--line);
@@ -2657,6 +2660,8 @@ function Style() {
       .tl-row.slide-past .tl-center .tl-card:nth-child(3), .tl-row.slide-future .tl-center .tl-card:nth-child(3) { animation-delay:.18s; }
       .tl-row.slide-past .tl-right .tl-card, .tl-row.slide-future .tl-right .tl-card { animation-delay:.24s; }
       .tl-right { display:flex; flex-direction:column; gap:14px; }
+      .tl-row.tl-c0 .tl-right, .tl-row.tl-c1 .tl-right { display:grid; grid-template-columns:1fr 1.5fr; gap:14px; align-items:start; }
+      @media (max-width: 900px) { .tl-row.tl-c0 .tl-right, .tl-row.tl-c1 .tl-right { display:flex; flex-direction:column; } }
       .todo-panel2 { background:var(--surface); border:1px solid var(--line); border-radius:14px; padding:14px 16px;
         box-shadow:0 10px 28px rgba(0,0,0,.3); }
       .tl-right .todo-panel2:only-child { flex:1; }
