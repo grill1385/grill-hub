@@ -1228,22 +1228,32 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
               {myMember && myNet.pay.length === 0 && myNet.receive.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
-              {myMember && myNet.pay.map((d) => (
-                <div key={d.otherId} className="todo-item">
-                  <span className="debt-line">deves <b>{eur(d.amount)}</b> a <b>{d.name}</b>{d.days > 0 ? <span className="debt-age"> · há {d.days} dia{d.days === 1 ? "" : "s"}</span> : null}</span>
+              {myMember && myNet.pay.length > 0 && (
+                <div className="debt-grid">
+                  {myNet.pay.map((d) => (
+                    <div key={d.otherId} className="debt-cell">
+                      <span className="debt-cell-name">{d.name}</span>
+                      <span className="debt-line">deves <b>{eur(d.amount)}</b></span>
+                      {d.days > 0 && <span className="debt-age">há {d.days} dia{d.days === 1 ? "" : "s"}</span>}
+                    </div>
+                  ))}
                 </div>
-              ))}
+              )}
               {myMember && myNet.pay.length > 1 && (
                 <p className="hint" style={{ margin: "2px 0 0" }}>Total a pagar (compensado): <b>{eur(myNet.total)}</b></p>
               )}
               {myMember && myNet.receive.length > 0 && (
                 <>
                   <h4>Contas a receber 💰</h4>
-                  {myNet.receive.map((d) => (
-                    <div key={d.otherId} className="todo-item">
-                      <span className="debt-line"><b>{d.name}</b> deve-te <b>{eur(d.amount)}</b>{d.days > 0 ? <span className="debt-age"> · há {d.days} dia{d.days === 1 ? "" : "s"}</span> : null}</span>
-                    </div>
-                  ))}
+                  <div className="debt-grid">
+                    {myNet.receive.map((d) => (
+                      <div key={d.otherId} className="debt-cell">
+                        <span className="debt-cell-name">{d.name}</span>
+                        <span className="debt-line">deve-te <b>{eur(d.amount)}</b></span>
+                        {d.days > 0 && <span className="debt-age">há {d.days} dia{d.days === 1 ? "" : "s"}</span>}
+                      </div>
+                    ))}
+                  </div>
                   {myNet.receive.length > 1 && (
                     <p className="hint" style={{ margin: "2px 0 0" }}>Total a receber (compensado): <b>{eur(myNet.receiveTotal)}</b></p>
                   )}
@@ -2617,7 +2627,7 @@ function Style() {
       .content.wide { max-width:none; }
       .content.wide-score { max-width:1240px; margin-inline:auto; }
       .home2 { width:100%; }
-      .tl-labels, .tl-row { display:grid; grid-template-columns:1.15fr 3fr 1.15fr; gap:14px; }
+      .tl-labels, .tl-row { display:grid; grid-template-columns:1.05fr 2.55fr 1.55fr; gap:14px; }
       .tl-labels h4 { margin:0 0 10px; }
       .tl-center { display:grid; grid-template-columns:repeat(3, 1fr); gap:14px; }
       .tl-slot { min-width:0; }
@@ -2679,6 +2689,11 @@ function Style() {
       .debt-line { font-size:12.5px; color:var(--muted); }
       .net-summary { margin-top:10px; padding:8px 10px; border-radius:8px; background:rgba(245,184,104,.06); border:1px solid var(--line); line-height:1.5; }
       .debt-age { color:var(--muted); font-weight:400; }
+      .debt-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:8px; margin:6px 0; }
+      .debt-cell { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:8px 10px;
+        display:flex; flex-direction:column; gap:2px; min-width:0; }
+      .debt-cell-name { font-weight:700; color:var(--ember); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+      .debt-cell .debt-age { font-size:11.5px; }
       .debt-badge { position:relative; display:inline-flex; width:18px; height:18px; border-radius:50%; align-items:center;
         justify-content:center; font-size:11px; font-weight:800; margin-left:7px; cursor:help; color:#1A0F08; vertical-align:middle; }
       .debt-badge.t7 { background:#F5B841; }
