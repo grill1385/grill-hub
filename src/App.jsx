@@ -1096,10 +1096,13 @@ export default function App() {
 
 /* Badge público de dívidas antigas (7d amarelo, 15d laranja, 30d vermelho, 60d preto brilhante) */
 function DebtBadge({ info, canShame, onShame }) {
+  const [open, setOpen] = useState(false);
   const d = info.days;
   const tier = d >= 60 ? "t60" : d >= 30 ? "t30" : d >= 15 ? "t15" : "t7";
   return (
-    <span className={`debt-badge ${tier}`} onClick={(e) => e.stopPropagation()} title="">
+    <span className={`debt-badge ${tier} ${open ? "open" : ""}`} title=""
+      onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+      onMouseLeave={() => setOpen(false)}>
       €
       <span className="debt-tip">
         <b>Contas por saldar há {info.days} dia{info.days === 1 ? "" : "s"} 💸</b>
@@ -2805,10 +2808,10 @@ function Style() {
       .debt-badge.t60 { background:#0A0A0A; color:#F5B841; border:1px solid #F5B841;
         box-shadow:0 0 8px rgba(245,184,104,.85), 0 0 16px rgba(245,184,104,.4); animation:debt-glow 1.6s ease-in-out infinite alternate; }
       @keyframes debt-glow { from { box-shadow:0 0 6px rgba(245,184,104,.6); } to { box-shadow:0 0 14px rgba(245,184,104,1), 0 0 24px rgba(245,184,104,.5); } }
-      .debt-tip { display:none; position:absolute; top:22px; left:50%; transform:translateX(-50%); z-index:30; min-width:230px;
+      .debt-tip { display:none; position:absolute; top:100%; left:50%; transform:translateX(-50%); z-index:30; min-width:230px;
         background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:10px 12px; box-shadow:0 12px 30px rgba(0,0,0,.45);
         font-size:12.5px; font-weight:400; color:var(--text); text-align:left; flex-direction:column; gap:4px; white-space:nowrap; }
-      .debt-badge:hover .debt-tip { display:flex; }
+      .debt-badge:hover .debt-tip, .debt-badge.open .debt-tip { display:flex; }
       .bday-banner { margin-top:12px; padding:12px 14px; border-radius:12px; border:1px solid var(--gold);
         background:linear-gradient(135deg, rgba(245,184,104,.14), rgba(255,122,61,.10)); }
       .bday-banner h4 { color:var(--gold); }
