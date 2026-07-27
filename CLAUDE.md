@@ -44,7 +44,9 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 ## Aniversários (Home, jul 2026)
 
-- Tabela `birthday_wishes` (member_id = aniversariante, from_member_id, year, message; unique por trio; RLS: leitura pública, membro escreve os seus). Carregada tolerantemente no api.loadAll (`wishes`).
+- Tabela `birthday_wishes` (member_id = aniversariante, from_member_id, year, message, emailed_at; unique por trio; RLS: leitura pública, membro escreve os seus). Carregada tolerantemente no api.loadAll (`wishes`).
+- Email do desejo: Edge Function `birthday-wish` (Brevo, autoriza via my_member_id = from_member_id; marca emailed_at; reenviar um desejo limpa emailed_at). Checkbox no modal + botão «Enviar também por email 📧» na Home para desejos já feitos sem email (aniversariante precisa de email).
+- Emojis tipo Discord: mapa EMOJI + `emojify()` em App.jsx converte `:nome:` (EN e PT, ex.: :fire:/:fogo:, :festa:, :bolo:) ao guardar, com pré-visualização no modal.
 - HomeTab (painel Contas, no fim): banner «Feliz aniversário» com emojis para o próprio no dia (por mês-dia de birth_date) + desejos recebidos do ano; para os outros membros: lembrete no dia com botão «Desejar parabéns» (modal com mensagem opcional, upsert 1/ano) e lembrete 1 semana antes (sem botão).
 
 ## Estado atual / pendentes
@@ -55,7 +57,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Contas das férias (jul 2026). Pré-requisito: `setup-ferias-contas.sql` corrido no SQL Editor — confirmar com o David.
 - Fluxo "já paguei"→confirmação + compras por membros (jul 2026). Pré-requisito: `setup-contas-pagamentos.sql` corrido no SQL Editor — confirmar com o David.
 - Parcelas + importação Excel de compras (jul 2026). Pré-requisito: `setup-contas-parcelas.sql` corrido no SQL Editor — confirmar com o David.
-- Aniversários na Home (jul 2026). Pré-requisito: `setup-aniversarios.sql` corrido no SQL Editor — confirmar com o David.
+- Aniversários na Home (jul 2026). Pré-requisitos: `setup-aniversarios.sql` corrido no SQL Editor (se corrido antes da opção de email, só a linha `alter ... emailed_at`) e Edge Function `birthday-wish` criada no painel do Supabase — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Convenções

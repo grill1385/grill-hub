@@ -2,6 +2,7 @@
 -- GrillHub — aniversários: desejos de parabéns na homepage
 -- Correr UMA vez no SQL Editor do Supabase.
 -- Requer: setup-perfil-rsvp.sql (my_member_id) e setup-ferias.sql (is_member).
+-- NOTA: se já correste este script antes da opção de email, corre APENAS a última linha (alter).
 -- ============================================================
 create table if not exists birthday_wishes (
   id text primary key,
@@ -9,6 +10,7 @@ create table if not exists birthday_wishes (
   from_member_id text not null references members(id) on delete cascade, -- quem deseja
   year int not null,
   message text,
+  emailed_at timestamptz,
   created_at timestamptz default now(),
   unique (member_id, from_member_id, year)
 );
@@ -22,3 +24,6 @@ create policy "membro edita o seu desejo" on birthday_wishes for update to authe
   using (from_member_id = my_member_id()) with check (from_member_id = my_member_id());
 create policy "membro apaga o seu desejo" on birthday_wishes for delete to authenticated
   using (from_member_id = my_member_id());
+
+-- Já corrido antes da opção de email? Corre só isto:
+alter table birthday_wishes add column if not exists emailed_at timestamptz;

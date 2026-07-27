@@ -30,6 +30,32 @@ const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} 
 
 const norm = (t) => String(t || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
 
+/* ---------- Emojis tipo Discord (:nome_do_emoji:) ---------- */
+const EMOJI = {
+  fire: "🔥", fogo: "🔥", tada: "🎉", festa: "🎉", parabens: "🎉", party: "🥳", festao: "🥳",
+  birthday: "🎂", bolo: "🎂", cake: "🎂", balloon: "🎈", balao: "🎈", gift: "🎁", presente: "🎁",
+  confetti: "🎊", heart: "❤️", coracao: "❤️", hearts: "💕", heart_eyes: "😍", sparkling_heart: "💖",
+  beer: "🍺", cerveja: "🍺", beers: "🍻", cervejas: "🍻", wine: "🍷", vinho: "🍷", champagne: "🍾",
+  cocktail: "🍸", whisky: "🥃", coffee: "☕", cafe: "☕", meat: "🍖", carne: "🍖", steak: "🥩",
+  bife: "🥩", chicken: "🍗", frango: "🍗", pizza: "🍕", burger: "🍔", batatas: "🍟", fries: "🍟",
+  grin: "😁", joy: "😂", rofl: "🤣", smile: "😄", sweat_smile: "😅", wink: "😉", sunglasses: "😎",
+  fixe: "😎", thinking: "🤔", zany: "🤪", drool: "🤤", cry: "😢", sob: "😭", kiss: "😘", beijo: "😘",
+  angel: "😇", devil: "😈", clown: "🤡", palhaco: "🤡", ghost: "👻", skull: "💀", caveira: "💀",
+  poop: "💩", hot: "🥵", cold: "🥶", clap: "👏", palmas: "👏", muscle: "💪", forca: "💪",
+  thumbsup: "👍", like: "👍", thumbsdown: "👎", ok_hand: "👌", pray: "🙏", wave: "👋",
+  handshake: "🤝", eyes: "👀", olhos: "👀", rocket: "🚀", foguete: "🚀", star: "⭐", estrela: "⭐",
+  sparkles: "✨", boom: "💥", zap: "⚡", rainbow: "🌈", sun: "☀️", sol: "☀️", moon: "🌙", lua: "🌙",
+  crown: "👑", coroa: "👑", rei: "👑", trophy: "🏆", trofeu: "🏆", medal: "🏅", money: "💰",
+  dinheiro: "💰", money_mouth: "🤑", gem: "💎", dance: "💃", dancar: "💃", man_dancing: "🕺",
+  soccer: "⚽", bola: "⚽", gamepad: "🎮", dice: "🎲", dart: "🎯", guitar: "🎸", music: "🎵",
+  musica: "🎵", mic: "🎤", camera: "📷", email: "📧", check: "✅", x: "❌", warning: "⚠️",
+  bomb: "💣", knife: "🔪", chef: "👨‍🍳", velho: "👴", baby: "👶", plane: "✈️", aviao: "✈️",
+  car: "🚗", carro: "🚗", van: "🚐", carrinha: "🚐", train: "🚆", comboio: "🚆", ship: "🚢",
+  barco: "🚢", beach: "🏖️", praia: "🏖️", tent: "⛺", tenda: "⛺", mountain: "⛰️", montanha: "⛰️",
+  "100": "💯",
+};
+const emojify = (t) => String(t || "").replace(/:([a-z0-9_+-]+):/gi, (all, name) => EMOJI[norm(name).replace(/-/g, "_")] || all);
+
 const shareOf = (pu, mid) => {
   if (pu.split === "custom") {
     if (pu.parcels?.length) {
@@ -534,16 +560,26 @@ export default function App() {
     } catch { showToast("Não foi possível eliminar a compra."); }
   }
 
-  async function sendBirthdayWish(memberId, message) {
+  async function sendBirthdayWish(memberId, message, emailToo) {
     if (!myMember) return;
-    const w = { id: uid(), memberId, fromMemberId: myMember.id, year: new Date().getFullYear(), message: (message || "").trim() };
+    const w = { id: uid(), memberId, fromMemberId: myMember.id, year: new Date().getFullYear(), message: emojify((message || "").trim()), emailedAt: null };
     try {
       await api.saveBirthdayWish(w);
       const wishes = [...(data.wishes || []).filter((x) => !(x.memberId === memberId && x.fromMemberId === myMember.id && x.year === w.year)), w];
       setData({ ...data, wishes });
       setModal(null);
       showToast("Parabéns enviados! 🎉");
+      if (emailToo) emailBirthdayWish(w);
     } catch { showToast("Não foi possível enviar os parabéns."); }
+  }
+
+  async function emailBirthdayWish(w) {
+    showToast("A enviar email… 📧");
+    try {
+      await api.emailBirthdayWish(w.id);
+      setData((d) => ({ ...d, wishes: (d.wishes || []).map((x) => (x.id === w.id ? { ...x, emailedAt: new Date().toISOString() } : x)) }));
+      showToast("Parabéns enviados por email! 📧");
+    } catch { showToast("Email falhou — a função birthday-wish está configurada no Supabase?"); }
   }
 
   async function importPurchases(evId, list) {
@@ -685,6 +721,7 @@ export default function App() {
               onConfirmPayment={(pu, mid) => toggleSettled(pu, mid)}
               wishes={data.wishes || []}
               onWish={(mid) => setModal({ type: "birthdayWish", memberId: mid })}
+              onEmailWish={emailBirthdayWish}
               onGoScoreboard={() => setTab("scoreboard")} />
           )}
 
@@ -998,7 +1035,7 @@ export default function App() {
    Componentes
    ============================================================ */
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, onGoScoreboard }) {
   /* aniversários: hoje e daqui a 1 semana (por mês-dia da data de nascimento) */
   const bdayYear = new Date().getFullYear();
   const todayMD = todayISO().slice(5);
@@ -1167,13 +1204,15 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                 <>
                   <h4>Aniversários 🎂</h4>
                   {bdayToday.filter((m) => m.id !== myMember.id).map((m) => {
-                    const wished = (wishes || []).some((w) => w.memberId === m.id && w.fromMemberId === myMember.id && w.year === bdayYear);
+                    const myWish = (wishes || []).find((w) => w.memberId === m.id && w.fromMemberId === myMember.id && w.year === bdayYear);
                     return (
                       <div key={m.id} className="todo-item bday-note">
                         <span>🎉 Hoje é o aniversário de <b>{m.name}</b>!</span>
-                        {wished
-                          ? <span className="hint" style={{ margin: 0 }}>Parabéns enviados ✓</span>
-                          : <button className="pill" onClick={() => onWish(m.id)}>Desejar parabéns 🎈</button>}
+                        {!myWish && <button className="pill" onClick={() => onWish(m.id)}>Desejar parabéns 🎈</button>}
+                        {myWish && <span className="hint" style={{ margin: 0 }}>Parabéns enviados ✓{myWish.emailedAt ? " 📧" : ""}</span>}
+                        {myWish && !myWish.emailedAt && m.email && (
+                          <button className="pill" onClick={() => onEmailWish(myWish)}>Enviar também por email 📧</button>
+                        )}
                       </div>
                     );
                   })}
@@ -1816,15 +1855,27 @@ function ImportEventsModal({ members, onImport, onClose }) {
 
 function BirthdayWishModal({ member, onSend, onClose }) {
   const [msg, setMsg] = useState("");
+  const [emailToo, setEmailToo] = useState(!!member.email);
+  const prev = emojify(msg);
   return (
     <Modal title={`Desejar parabéns a ${member.name} 🎂`} onClose={onClose}>
       <p className="hint" style={{ marginTop: 0 }}>A tua mensagem aparece na homepage de {member.name} hoje.</p>
       <label>Mensagem personalizada (opcional)
-        <textarea rows={3} maxLength={280} placeholder="ex.: Parabéns, lenda! Que a brasa nunca te falte 🔥"
+        <textarea rows={3} maxLength={280} placeholder="ex.: Parabéns, lenda! Que a brasa nunca te falte :fire:"
           value={msg} onChange={(e) => setMsg(e.target.value)} autoFocus />
       </label>
+      <p className="hint" style={{ margin: "2px 0 6px" }}>Podes usar emojis como no Discord — :fire: :festa: :bolo: :cerveja: :coracao: :festao:…</p>
+      {msg && prev !== msg && <p className="hint" style={{ margin: "0 0 8px" }}>Pré-visualização: {prev}</p>}
+      {member.email ? (
+        <label className="check">
+          <input type="checkbox" checked={emailToo} onChange={(e) => setEmailToo(e.target.checked)} />
+          {" "}Enviar também por email 📧
+        </label>
+      ) : (
+        <p className="hint">{member.name} não tem email registado — os parabéns aparecem só no site.</p>
+      )}
       <div className="actions">
-        <button className="btn ember" onClick={() => onSend(msg)}>Enviar parabéns 🎈</button>
+        <button className="btn ember" onClick={() => onSend(msg, emailToo && !!member.email)}>Enviar parabéns 🎈</button>
       </div>
     </Modal>
   );

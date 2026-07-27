@@ -55,7 +55,7 @@ const fromPurchase = (p) => ({
 
 const toWish = (r) => ({
   id: r.id, memberId: r.member_id, fromMemberId: r.from_member_id,
-  year: r.year, message: r.message || "", createdAt: r.created_at || null,
+  year: r.year, message: r.message || "", emailedAt: r.emailed_at || null, createdAt: r.created_at || null,
 });
 
 export const api = {
@@ -123,10 +123,15 @@ export const api = {
   /* desejo de parabéns (1 por aniversariante/ano; ver setup-aniversarios.sql) */
   async saveBirthdayWish(w) {
     const { error } = await supabase.from("birthday_wishes").upsert(
-      { id: w.id, member_id: w.memberId, from_member_id: w.fromMemberId, year: w.year, message: w.message || null },
+      { id: w.id, member_id: w.memberId, from_member_id: w.fromMemberId, year: w.year, message: w.message || null, emailed_at: null },
       { onConflict: "member_id,from_member_id,year" }
     );
     if (error) throw error;
+  },
+  /* envia o desejo por email via Edge Function (Brevo) */
+  async emailBirthdayWish(wishId) {
+    const { data, error } = await supabase.functions.invoke("birthday-wish", { body: { wishId } });
+    if (error || data?.error) throw error || new Error(data.error);
   },
   async claimPayment(purchaseId, value) {
     const { error } = await supabase.rpc("claim_my_payment", { p_purchase_id: purchaseId, p_value: value });
