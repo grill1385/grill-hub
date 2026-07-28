@@ -537,6 +537,7 @@ export default function App() {
   const shameOnDiscord = (mb) => mentionDiscord({ kind: "shame", memberId: mb.id }, `${mb.name} envergonhado(a)`);
   const announceEventDiscord = (ev) => mentionDiscord({ kind: "event", eventId: ev.id }, "Evento anunciado");
   const chargePurchaseDiscord = (pu) => mentionDiscord({ kind: "payment", purchaseId: pu.id }, "Cobrança enviada");
+  const remindDebtsDiscord = (text, memberIds) => mentionDiscord({ kind: "custom", text, memberIds }, "Lembrete enviado");
 
   async function toggleConfirmation(ev) {
     if (!myMember) return;
@@ -904,7 +905,9 @@ export default function App() {
                           {debtMap[row.member.id]?.days >= 7 && (
                             <DebtBadge info={debtMap[row.member.id]}
                               canShame={!!myMember && myMember.id !== row.member.id}
-                              onShame={() => shameMember(row.member.id)} />
+                              onShame={() => shameMember(row.member.id)}
+                              canShameDiscord={isAdmin && !!row.member.discordId}
+                              onShameDiscord={() => shameOnDiscord(row.member)} />
                           )}
                           {row.member.username && <span className="uname">@{row.member.username}</span>}
                         </span>
@@ -1039,6 +1042,7 @@ export default function App() {
           onNotify={() => notifyEventMembers(ev)}
           onDiscordEvent={() => announceEventDiscord(ev)}
           onDiscordPayment={(pu) => chargePurchaseDiscord(pu)}
+          onDiscordDebts={remindDebtsDiscord}
           onShare={() => shareEvent(ev)}
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
@@ -1114,7 +1118,7 @@ export default function App() {
    ============================================================ */
 
 /* Badge público de dívidas antigas (7d amarelo, 15d laranja, 30d vermelho, 60d preto brilhante) */
-function DebtBadge({ info, canShame, onShame }) {
+function DebtBadge({ info, canShame, onShame, canShameDiscord, onShameDiscord }) {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   useEffect(() => {
@@ -1138,6 +1142,12 @@ function DebtBadge({ info, canShame, onShame }) {
           <span className="pill shame-btn" role="button"
             onClick={(e) => { e.stopPropagation(); onShame(); }}>
             Envergonha 😳
+          </span>
+        )}
+        {canShameDiscord && (
+          <span className="pill shame-btn" role="button" title="Envergonhar publicamente no Discord"
+            onClick={(e) => { e.stopPropagation(); onShameDiscord(); }}>
+            No Discord 💬😳
           </span>
         )}
       </span>
@@ -1640,7 +1650,7 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onDiscordDebts, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
   /* saldos compensados: por devedor, a quem e quanto deve pagar */
   const settle = pairwiseNet(purchases);
@@ -1655,6 +1665,14 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
   const mailtoHref = owingEmails.length
     ? `mailto:${owingEmails.join(",")}?subject=${encodeURIComponent(`GrillHub — contas por saldar: ${ev.name}`)}&body=${encodeURIComponent(`Olá! Há contas por saldar do evento "${ev.name}" (valores já compensados entre todos):\n\n${mailtoBody}\n\nDetalhes: https://grill1385.github.io/grill-hub/`)}`
     : null;
+  const debtorIds = Object.keys(byDebtor);
+  const discordDebtText = () => {
+    const linhas = Object.entries(byDebtor).map(([id, lines]) => {
+      const detalhe = lines.sort((a, b) => b.amount - a.amount).map((l) => `   • ${eur(l.amount)} a ${nm(l.to)}`).join("\n");
+      return `**${nm(id)}**:\n${detalhe}`;
+    }).join("\n");
+    return `💸🔥 **Contas por saldar — ${ev.name}** 🔥💸\n_(valores já compensados entre todos)_\n\n${linhas}\n\nAcertem contas no GrillHub 👉 https://grill1385.github.io/grill-hub/`;
+  };
   const st = getStatus(ev); const s = STATUS_STYLE[st];
   const present = members.filter((m) => ev.presences?.[m.id]);
   const absent = members.filter((m) => ev.presences && ev.presences[m.id] === false);
@@ -1804,6 +1822,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
           <button className="btn ghost small" onClick={onAddPurchase}>+ Compra</button>
           {isAdmin && <button className="btn ghost small" onClick={onImportPurchases}>Importar Excel</button>}
           {isAdmin && mailtoHref && <a className="btn ghost small" href={mailtoHref} style={{ textDecoration: "none", display: "inline-flex", alignItems: "center" }}>Enviar lembrete por email</a>}
+          {isAdmin && debtorIds.length > 0 && <button className="btn ghost small" title="Envia as contas por saldar deste evento para o Discord, mencionando os devedores" onClick={() => onDiscordDebts(discordDebtText(), debtorIds)}>Enviar lembrete por Discord 💬</button>}
         </div>
       )}
     </Modal>
