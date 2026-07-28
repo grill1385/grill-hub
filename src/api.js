@@ -15,12 +15,12 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 const toMember = (r) => ({
   id: r.id, name: r.name, email: r.email,
   birthDate: r.birth_date, joinDate: r.join_date, roleId: r.role_id,
-  username: r.username, avatarUrl: r.avatar_url,
+  username: r.username, avatarUrl: r.avatar_url, discordId: r.discord_id,
 });
 const fromMember = (m) => ({
   id: m.id, name: m.name, email: m.email || null,
   birth_date: m.birthDate || null, join_date: m.joinDate || null, role_id: m.roleId || null,
-  username: m.username || null, avatar_url: m.avatarUrl || null,
+  username: m.username || null, avatar_url: m.avatarUrl || null, discord_id: m.discordId || null,
 });
 const toEvent = (r) => ({
   id: r.id, name: r.name, dateStart: r.date_start, dateEnd: r.date_end,
@@ -112,11 +112,20 @@ export const api = {
   async deleteRole(id) { const { error } = await supabase.from("roles").delete().eq("id", id); if (error) throw error; },
   async addAdmin(email) { const { error } = await supabase.from("admins").insert({ email, is_main: false }); if (error) throw error; },
   async removeAdmin(email) { const { error } = await supabase.from("admins").delete().eq("email", email).eq("is_main", false); if (error) throw error; },
-  async updateMyProfile(username, birthDate, avatarUrl) {
+  async updateMyProfile(username, birthDate, avatarUrl, discordId) {
     const { error } = await supabase.rpc("update_my_profile", {
-      p_username: username || null, p_birth_date: birthDate || null, p_avatar_url: avatarUrl || null,
+      p_username: username || null, p_birth_date: birthDate || null,
+      p_avatar_url: avatarUrl || null, p_discord_id: discordId || null,
     });
     if (error) throw error;
+  },
+  // Envia uma mensagem para o Discord via Edge Function (so admins). payload:
+  //  { kind: "shame", memberId } | { kind: "event", eventId }
+  //  { kind: "payment", purchaseId } | { kind: "custom", text, memberIds? }
+  async mentionDiscord(payload) {
+    const { data, error } = await supabase.functions.invoke("discord-notify", { body: payload });
+    if (error || data?.error) throw error || new Error(data.error);
+    return data;
   },
   async setMyConfirmation(eventId, value) {
     const { error } = await supabase.rpc("set_my_confirmation", { p_event_id: eventId, p_value: value });

@@ -522,6 +522,22 @@ export default function App() {
     }
   }
 
+  async function mentionDiscord(payload, verbo) {
+    showToast(`A enviar para o Discord…`);
+    try {
+      const res = await api.mentionDiscord(payload);
+      let msg = `${verbo} no Discord!`;
+      if (typeof res?.pinged === "number") msg += ` (${res.pinged} mencionado(s))`;
+      if (res?.semDiscord?.length) msg += ` Sem Discord ligado: ${res.semDiscord.join(", ")}.`;
+      showToast(msg);
+    } catch (e) {
+      showToast(`Não foi possível enviar — ${String(e?.message || e).slice(0, 90)}`);
+    }
+  }
+  const shameOnDiscord = (mb) => mentionDiscord({ kind: "shame", memberId: mb.id }, `${mb.name} envergonhado(a)`);
+  const announceEventDiscord = (ev) => mentionDiscord({ kind: "event", eventId: ev.id }, "Evento anunciado");
+  const chargePurchaseDiscord = (pu) => mentionDiscord({ kind: "payment", purchaseId: pu.id }, "Cobrança enviada");
+
   async function toggleConfirmation(ev) {
     if (!myMember) return;
     const next = !ev.confirmations?.[myMember.id];
@@ -540,12 +556,12 @@ export default function App() {
   async function saveMyProfile(f) {
     try {
       if (myMember) {
-        await api.updateMyProfile(f.username.trim(), f.birthDate || null, f.avatarUrl.trim());
+        await api.updateMyProfile(f.username.trim(), f.birthDate || null, f.avatarUrl.trim(), f.discordId.trim());
         setData({
           ...data,
           members: data.members.map((m) =>
             m.id === myMember.id
-              ? { ...m, username: f.username.trim() || null, birthDate: f.birthDate || null, avatarUrl: f.avatarUrl.trim() || null }
+              ? { ...m, username: f.username.trim() || null, birthDate: f.birthDate || null, avatarUrl: f.avatarUrl.trim() || null, discordId: f.discordId.trim() || null }
               : m
           ),
         });
@@ -1021,6 +1037,8 @@ export default function App() {
           onMember={(id) => setModal({ type: "memberDetail", id })}
           onConfirm={() => toggleConfirmation(ev)}
           onNotify={() => notifyEventMembers(ev)}
+          onDiscordEvent={() => announceEventDiscord(ev)}
+          onDiscordPayment={(pu) => chargePurchaseDiscord(pu)}
           onShare={() => shareEvent(ev)}
           onAddPurchase={() => setModal({ type: "purchaseForm", eventId: ev.id })}
           onEditPurchase={(pid) => setModal({ type: "purchaseForm", eventId: ev.id, id: pid })}
@@ -1041,6 +1059,7 @@ export default function App() {
         const attended = sortedEventsAsc.filter((e) => e.presences?.[mb.id]);
         const row = scoreboard.find((r) => r.member.id === mb.id);
         return <MemberDetailModal mb={mb} role={roleById[mb.roleId]} attended={attended} row={row}
+          isAdmin={isAdmin} onShame={() => shameOnDiscord(mb)}
           onEvent={(id) => setModal({ type: "eventDetail", id })} onClose={() => setModal(null)} />;
       })()}
 
@@ -1456,6 +1475,7 @@ function ProfileModal({ myMember, email, onSave, onClose }) {
     username: myMember?.username || "",
     birthDate: myMember?.birthDate || "",
     avatarUrl: myMember?.avatarUrl || "",
+    discordId: myMember?.discordId || "",
     newPassword: "",
   }));
   const [uploading, setUploading] = useState(false);
@@ -1486,6 +1506,10 @@ function ProfileModal({ myMember, email, onSave, onClose }) {
           {uploading && <p className="hint">A carregar imagem…</p>}
           {f.avatarUrl && <img src={f.avatarUrl} alt="" style={{ width: 56, height: 56, borderRadius: "50%", objectFit: "cover", border: "1px solid var(--line)" }} />}
           <label style={{ marginTop: 10 }}>Ou URL da imagem<input value={f.avatarUrl} onChange={(e) => set("avatarUrl", e.target.value)} placeholder="https://…" /></label>
+          <label style={{ marginTop: 10 }}>Discord ID (para o bot te mencionar)
+            <input value={f.discordId} onChange={(e) => set("discordId", e.target.value)} placeholder="ex.: 123456789012345678" inputMode="numeric" />
+          </label>
+          <p className="hint">No Discord: Definições → Avançado → Modo de programador. Depois botão direito no teu nome → Copiar ID.</p>
         </>
       ) : (
         <p className="hint">Esta conta ainda não está associada a nenhum membro — pede ao admin para registar este email num membro.</p>
@@ -1616,7 +1640,7 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
   /* saldos compensados: por devedor, a quem e quanto deve pagar */
   const settle = pairwiseNet(purchases);
@@ -1693,6 +1717,11 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
                 Avisar membros por email
               </button>
             )}
+            {isAdmin && (
+              <button className="btn ghost" title="Anuncia este evento no Discord e menciona todos os membros com Discord ligado" onClick={onDiscordEvent}>
+                📣 Anunciar no Discord
+              </button>
+            )}
           </div>
         </>
       )}
@@ -1711,6 +1740,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               <span className="purchase-total">{eur(pu.total)}</span>
+              {isAdmin && <button className="iconbtn" title="Cobrar no Discord (menciona quem tem esta compra por saldar)" onClick={() => onDiscordPayment(pu)}>💸</button>}
               {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
             </div>
             <div className="hint" style={{ marginTop: 0 }}>
@@ -1879,7 +1909,7 @@ function EventFormModal({ ev, members, places = [], onSave, onDelete, onClose })
   );
 }
 
-function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
+function MemberDetailModal({ mb, role, attended, row, isAdmin, onShame, onEvent, onClose }) {
   return (
     <Modal title={mb.name} onClose={onClose} wide>
       <div className="detail-grid">
@@ -1891,7 +1921,16 @@ function MemberDetailModal({ mb, role, attended, row, onEvent, onClose }) {
         <div><span className="klabel">Presenças</span>{row ? `${row.pct}% (${row.present}/${row.total})` : "—"}</div>
         <div><span className="klabel">Sequência atual</span>{row?.streak ? <StreakFlame n={row.streak} best={row.bestStreak} /> : "—"}</div>
         <div><span className="klabel">Melhor sequência</span>{row?.bestStreak ? `${row.bestStreak} seguido(s)` : "—"}</div>
+        <div><span className="klabel">Discord</span>{mb.discordId ? "Ligado ✅" : "Não ligado"}</div>
       </div>
+      {isAdmin && (
+        <div className="actions" style={{ justifyContent: "flex-start", marginTop: 4 }}>
+          <button className="btn ember" title={mb.discordId ? "Menciona este membro no Discord" : "Este membro ainda não ligou o Discord"}
+            disabled={!mb.discordId} onClick={onShame}>
+            😳 Envergonhar no Discord
+          </button>
+        </div>
+      )}
       <h4>Eventos em que esteve presente ({attended.length})</h4>
       {attended.length === 0 && <p className="hint">Ainda sem presenças registadas.</p>}
       <div className="mini-list">
@@ -1911,7 +1950,7 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
     id: mb?.id || uid(), name: mb?.name || "",
     email: mb?.email || "",
     birthDate: mb?.birthDate || "", joinDate: mb?.joinDate || "",
-    roleId: mb?.roleId || "",
+    roleId: mb?.roleId || "", discordId: mb?.discordId || "",
   }));
   const set = (k, v) => setF((o) => ({ ...o, [k]: v }));
   return (
@@ -1928,9 +1967,13 @@ function MemberFormModal({ mb, roles, onSave, onDelete, onClose }) {
           {roles.map((r) => <option key={r.id} value={r.id}>{r.label}</option>)}
         </select>
       </label>
+      <label>Discord ID (para menções no servidor)
+        <input value={f.discordId} onChange={(e) => set("discordId", e.target.value)} placeholder="ex.: 123456789012345678" inputMode="numeric" />
+      </label>
+      <p className="hint">No Discord: Definições → Avançado → Modo de programador. Depois botão direito no membro → Copiar ID.</p>
       <div className="actions">
         {editing && <button className="btn danger" onClick={() => onDelete(f.id)}>Eliminar</button>}
-        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...(mb || {}), ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null })}>Guardar membro</button>
+        <button className="btn ember" disabled={!f.name.trim()} onClick={() => onSave({ ...(mb || {}), ...f, name: f.name.trim(), email: f.email.trim() || null, roleId: f.roleId || null, discordId: f.discordId.trim() || null })}>Guardar membro</button>
       </div>
     </Modal>
   );
