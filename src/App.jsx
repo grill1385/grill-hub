@@ -538,6 +538,14 @@ export default function App() {
   const announceEventDiscord = (ev) => mentionDiscord({ kind: "event", eventId: ev.id }, "Evento anunciado");
   const chargePurchaseDiscord = (pu) => mentionDiscord({ kind: "payment", purchaseId: pu.id }, "Cobrança enviada");
   const remindDebtsDiscord = (text, memberIds) => mentionDiscord({ kind: "custom", text, memberIds }, "Lembrete enviado");
+  const shameDebtOnDiscord = (mb, info) => {
+    const pairs = [...(info?.pairs || [])].sort((a, b) => b.amount - a.amount);
+    const detalhe = pairs.map((pr) => `   • ${eur(pr.amount)} a ${pr.name}`).join("\n");
+    const total = Math.round(pairs.reduce((acc, pr) => acc + pr.amount, 0) * 100) / 100;
+    const quem = mb.discordId ? `<@${mb.discordId}>` : `**${mb.name}**`;
+    const text = `😳🔥 **VERGONHA — contas por saldar** 🔥😳\n${quem} tem contas por saldar há **${info.days} dia${info.days === 1 ? "" : "s"}**:\n${detalhe}\nTotal: **${eur(total)}**\n\nPaga lá isso 👉 https://grill1385.github.io/grill-hub/`;
+    mentionDiscord({ kind: "custom", text, memberIds: [mb.id] }, `${mb.name} envergonhado(a)`);
+  };
 
   async function toggleConfirmation(ev) {
     if (!myMember) return;
@@ -907,7 +915,7 @@ export default function App() {
                               canShame={!!myMember && myMember.id !== row.member.id}
                               onShame={() => shameMember(row.member.id)}
                               canShameDiscord={isAdmin && !!row.member.discordId}
-                              onShameDiscord={() => shameOnDiscord(row.member)} />
+                              onShameDiscord={() => shameDebtOnDiscord(row.member, debtMap[row.member.id])} />
                           )}
                           {row.member.username && <span className="uname">@{row.member.username}</span>}
                         </span>
