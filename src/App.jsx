@@ -6,10 +6,11 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
      (email+password ou Google) para gerir
    - Dados em tabelas Supabase com RLS (ver src/api.js)
    ============================================================ */
-import { api, supabase } from "./api.js";
+import { api, supabase, availabilityApi } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
+import DisponibilidadeTab, { missingDays as availMissingDays, monthsOf as availMonthsOf, weeksWindow as availWeeksWindow } from "./Disponibilidade.jsx";
 import { CalendarView, EventsMap, EventLocationManager, EventSearch, needsLocation, extractLatLng } from "./EventsExtra.jsx";
 import StatsView from "./Stats.jsx";
 
@@ -227,6 +228,9 @@ export default function App() {
 
   const [modal, setModal] = useState(null); // {type, ...payload}
   const [toast, setToast] = useState(null);
+  /* disponibilidades das próximas 4 semanas — só para o aviso da Home
+     (a aba Mapa de Disponibilidade carrega o seu próprio período) */
+  const [availability, setAvailability] = useState([]);
 
   const myEmail = session?.user?.email?.toLowerCase() || null;
   const adminRow = data?.admins?.find((a) => a.email === myEmail);
@@ -262,6 +266,17 @@ export default function App() {
     if (!session) return;
     api.loadAll().then(setData).catch(() => {});
   }, [session?.user?.id]);
+
+  /* disponibilidades da janela de 4 semanas (para o aviso na Home) */
+  const loadAvailability = React.useCallback(() => {
+    availabilityApi.loadMonths(availMonthsOf(availWeeksWindow())).then(setAvailability).catch(() => {});
+  }, []);
+  useEffect(() => { loadAvailability(); }, [loadAvailability, session?.user?.id]);
+  /* dias por classificar nas próximas 4 semanas (badge na barra lateral) */
+  const availMissingCount = useMemo(
+    () => (myMember ? availMissingDays(availability, myMember.id).length : 0),
+    [availability, myMember]
+  );
 
   useEffect(() => {
     if (loading || !data) return;
@@ -768,6 +783,7 @@ export default function App() {
           {[
             ["home", "Home"],
             ["eventos", "Eventos"],
+            ["disponibilidade", "Mapa de Disponibilidade"],
             ["ferias", "Férias do Grill"],
             ["scoreboard", "Scoreboard"],
             ["membros", "Membros"],
@@ -778,6 +794,7 @@ export default function App() {
             <button key={id} className={`navbtn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
               {label}
               {id === "admin" && pendingProfiles.length > 0 && <span className="badge">{pendingProfiles.length}</span>}
+              {id === "disponibilidade" && myMember && availMissingCount > 0 && <span className="badge">{availMissingCount}</span>}
             </button>
           ))}
         </nav>
@@ -797,7 +814,14 @@ export default function App() {
               shames={data.shames || []}
               onClearShame={clearShame}
               onDebtDetail={(pair, direction) => setModal({ type: "debtDetail", pair, direction })}
+              availability={availability}
+              onGoAvailability={() => setTab("disponibilidade")}
               onGoScoreboard={() => setTab("scoreboard")} />
+          )}
+
+          {tab === "disponibilidade" && (
+            <DisponibilidadeTab members={data.members} myMember={myMember}
+              session={session} showToast={showToast} onChanged={loadAvailability} />
           )}
 
           {tab === "ferias" && (
@@ -1197,8 +1221,14 @@ function DebtDetailModal({ pair, direction, myName, onClose }) {
   );
 }
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, shames, onClearShame, onDebtDetail, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, shames, onClearShame, onDebtDetail, availability, onGoAvailability, onGoScoreboard }) {
   const myShames = myMember ? (shames || []).filter((sh) => sh.memberId === myMember.id && !sh.cleared) : [];
+  /* disponibilidade: dias por classificar nas próximas 4 semanas (janela alinhada
+     à semana, por isso o aviso só "volta" uma vez por semana) */
+  const availMissing = useMemo(
+    () => availMissingDays(availability, myMember?.id),
+    [availability, myMember]
+  );
   /* aniversários: hoje e daqui a 1 semana (por mês-dia da data de nascimento) */
   const bdayYear = new Date().getFullYear();
   const todayMD = todayISO().slice(5);
@@ -1347,6 +1377,15 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                   <button className="pill" onClick={() => onConfirm(ev)}>Confirmar presença</button>
                 </div>
               ))}
+              {myMember && availMissing.length > 0 && (
+                <div className="avail-note">
+                  <span>
+                    🗓️ Ainda não disseste se estás livre em <b>{availMissing.length}</b> dia{availMissing.length === 1 ? "" : "s"} das
+                    próximas 4 semanas. Marca a tua disponibilidade para o Grill conseguir agendar eventos! 🔥
+                  </span>
+                  <button className="pill" onClick={onGoAvailability}>Marcar disponibilidade</button>
+                </div>
+              )}
             </div>
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
@@ -2871,6 +2910,9 @@ function Style() {
       button.debt-cell { font:inherit; color:var(--text); text-align:left; cursor:pointer; transition:border-color .15s; }
       button.debt-cell:hover { border-color:var(--ember); }
       .shame-btn { margin-top:6px; align-self:flex-start; border-color:var(--ember); color:var(--ember); cursor:pointer; }
+      .avail-note { margin-top:12px; padding:10px 12px; border-radius:10px; border:1px solid var(--gold);
+        background:rgba(245,184,65,.09); display:flex; gap:10px; align-items:center; flex-wrap:wrap; font-size:13.5px; }
+      .avail-note span:first-child { flex:1; min-width:200px; }
       .shame-note { margin-top:12px; padding:10px 12px; border-radius:10px; border:1px solid #E23B3B;
         background:rgba(226,59,59,.10); display:flex; align-items:flex-start; gap:8px; font-size:13.5px; line-height:1.5; }
       .shame-note span:first-child { flex:1; }

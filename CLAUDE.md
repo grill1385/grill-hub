@@ -10,7 +10,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 ## Stack e arquitetura
 
-- React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`), `src/main.jsx`.
+- React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/Disponibilidade.jsx` (aba Mapa de Disponibilidade), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`, `availabilityApi`), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`, `resolve-maps`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
 - Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`, `setup-contas-parcelas.sql`, `setup-aniversarios.sql`, `setup-vergonha.sql`.
@@ -21,6 +21,18 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - `members` (id, name, email, birth_date, join_date, role_id, username, avatar_url) — conta liga-se a membro por email igual.
 - `events` (datas, status "Por planear/Agendado/Concluído", `presences` jsonb, `confirmations` jsonb RSVP), `roles` (label, level), `admins` (email, is_main), `purchases` (contas por evento, split equal/custom, settled, claimed, receipts), `profiles` (contas auth pendentes de ligação).
 - Férias (jul 2026): `vacations` (name, date_start/end, event_id opcional, notes, `confirmations` jsonb {memberId: bool}), `vacation_places` (city, country, arrive/depart_date, sort), `vacation_stays` (place_id, check_in/out + horas, price_night_person, price_total, links jsonb, status), `vacation_transports` (from/to_place_id — null = "Casinha" (casa, início/fim), kind, date, time, price_person, links, status; is_general/name/date_end = transporte geral tipo carrinha alugada com período de uso; general_id liga um deslocamento a um geral), `vacation_tasks` (auto_key null = manual; assignees jsonb, due_date, done), `vacation_purchases` (igual a purchases mas com vacation_id e created_at; split equal="Divisão por todos"/custom="Só pago o que usufruo").
+
+## Aba "Mapa de Disponibilidade" (src/Disponibilidade.jsx) — regras
+
+- Tabela `availabilities` (member_id, month 'YYYY-MM', days jsonb {'YYYY-MM-DD': 'livre'|'ocupado'|'indeciso'}, updated_at; PK member_id+month). Guardar por MÊS e não por dia mantém as linhas bem abaixo do limite de 1000 do PostgREST. RLS: leitura pública; o próprio membro gere a sua (`my_member_id()`); admin como válvula de manutenção (a UI não expõe edição de outros).
+- Escrita via RPC `set_my_availability(p_days text[], p_state text)` — aceita dias de meses diferentes, `p_state null` limpa, e apaga meses que fiquem vazios.
+- `availabilityApi` em api.js: `loadMonths(months)` (tolerante — devolve [] se a migração ainda não correu) e `setMine(days, state)`.
+- Vista calendário: mês atual + a última semana do mês anterior e a primeira do seguinte (grelha = segunda da semana do dia 1 menos 7 dias → domingo da semana do último dia mais 7). Semana começa à segunda.
+- Seleção múltipla: arrastar (pointer events; no toque liberta-se o pointer capture e usa-se `elementFromPoint`; `touch-action: pan-y` deixa o scroll vertical) ou shift+clique. O painel abaixo da grelha aplica o estado à seleção e, quando é 1 dia só, mostra quem está livre/ocupado/indeciso/sem resposta.
+- Bordas brilhantes por nº de **livres** (só «livre» conta): 5-6 vermelha (`t5`), 7-9 laranja (`t7`), 10+ amarela (`t10`); 0-4 sem borda. `hotTier()` exportado.
+- Aviso na Home + badge na barra lateral: `missingDays()` usa uma janela de 4 semanas alinhada à semana (`weeksWindow` = segunda da semana atual + 28 dias, filtrando dias já passados) — o fim da janela só avança à segunda-feira, por isso o lembrete "volta" 1x/semana e não todos os dias. Só desaparece quando todos os dias da janela estiverem classificados. Na própria aba há um banner com atalhos "Marcar tudo como Livre/Ocupado" e os dias em falta ficam com borda tracejada dourada.
+- Secção "Melhores datas à vista": dias futuros do período visível com ≥5 livres, ordenados por nº de livres.
+- Pré-requisito: `setup-disponibilidades.sql` corrido no SQL Editor.
 
 ## Aba "Férias do Grill" (src/Ferias.jsx) — regras
 
@@ -59,6 +71,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Parcelas + importação Excel de compras (jul 2026). Pré-requisito: `setup-contas-parcelas.sql` corrido no SQL Editor — confirmar com o David.
 - «Envergonha» (jul 2026). Pré-requisito: `setup-vergonha.sql` corrido no SQL Editor — confirmar com o David.
 - Aniversários na Home (jul 2026). Pré-requisitos: `setup-aniversarios.sql` corrido no SQL Editor (se corrido antes da opção de email, só a linha `alter ... emailed_at`) e Edge Function `birthday-wish` criada no painel do Supabase — confirmar com o David.
+- Mapa de Disponibilidade (ago 2026). Pré-requisito: `setup-disponibilidades.sql` corrido no SQL Editor — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Convenções

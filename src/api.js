@@ -300,6 +300,27 @@ export const feriasApi = {
 
 
 /* ============================================================
+   Mapa de Disponibilidade (tabela: ver supabase/setup-disponibilidades.sql)
+   Uma linha por membro e por mês: days = { 'YYYY-MM-DD': 'livre'|'ocupado'|'indeciso' }
+   ============================================================ */
+const toAvail = (r) => ({ memberId: r.member_id, month: r.month, days: r.days || {} });
+
+export const availabilityApi = {
+  /* carrega as linhas dos meses indicados ('YYYY-MM'); tolerante se a migração ainda não correu */
+  async loadMonths(months) {
+    if (!months?.length) return [];
+    const { data, error } = await supabase.from("availabilities").select("*").in("month", months);
+    if (error) return [];
+    return data.map(toAvail);
+  },
+  /* define (state) ou limpa (state = null) vários dias de uma vez, para o membro autenticado */
+  async setMine(days, state) {
+    const { error } = await supabase.rpc("set_my_availability", { p_days: days, p_state: state || null });
+    if (error) throw error;
+  },
+};
+
+/* ============================================================
    Media do Grill (tabela: ver supabase/setup-media.sql)
    Documentos, Mangá da Lore do Grill e Fotos, em árvore de pastas.
    ============================================================ */
