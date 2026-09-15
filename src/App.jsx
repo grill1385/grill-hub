@@ -1354,6 +1354,8 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
       </div>
       <div className={`tl-row tl-c${Math.min(3, centerEvs.length)} ${dir > 0 ? "slide-past" : dir < 0 ? "slide-future" : ""}`} key={`k${k}`}>
         <div className="tl-slot tl-left">
+          {/* rótulos só visíveis no telemóvel, onde a linha temporal passa a coluna */}
+          <h4 className="tl-mlabel">{k === 0 ? "Últimos eventos" : `Linha temporal · ${k} para trás`}</h4>
           {leftEv ? card(leftEv, 0, true) : <div className="tl-card empty-card"><p className="hint">Ainda sem eventos concluídos.</p></div>}
           <div className="tl-arrows">
             <button className="arrow" disabled={k >= maxOffset} onClick={() => move(1)} title="Recuar no tempo">‹</button>
@@ -1361,6 +1363,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
           </div>
         </div>
         <div className="tl-slot tl-center">
+          <h4 className="tl-mlabel">Próximos eventos</h4>
           {centerEvs.length
             ? centerEvs.map((ev, i) => card(ev, i))
             : <div className="tl-card empty-card"><p className="hint">Sem próximos eventos.</p></div>}
@@ -2843,6 +2846,7 @@ function Style() {
       .tl-labels.tl-c1, .tl-row.tl-c1 { grid-template-columns:1.05fr 0.95fr 3.15fr; }
       .tl-labels.tl-c0, .tl-row.tl-c0 { grid-template-columns:1.05fr 0.9fr 3.2fr; }
       .tl-labels h4 { margin:0 0 10px; }
+      .tl-mlabel { display:none; }
       .tl-center { display:grid; grid-template-columns:repeat(auto-fit, minmax(0, 1fr)); gap:14px; }
       .tl-slot { min-width:0; }
       .tl-left { position:relative; display:flex; flex-direction:column; }
@@ -3019,6 +3023,28 @@ function Style() {
         /* Balão de dívidas: fica dentro do ecrã em vez de sair pela direita. */
         .debt-tip { left:auto; right:0; transform:none; min-width:0;
           width:min(280px, calc(100vw - 48px)); white-space:normal; }
+
+        /* ----- Home: a linha temporal vira coluna, por isso os cartões deixam de
+           ter altura fixa (deixavam buracos) e cada bloco ganha o seu título. ----- */
+        .tl-mlabel { display:block; margin:18px 0 8px; }
+        .tl-left .tl-mlabel:first-child { margin-top:0; }
+        .tl-card { min-height:0; padding:13px 14px; gap:6px; }
+        .tl-card.big { height:auto; }
+        .tl-foot { margin-top:6px; }
+        .fade-1, .fade-2 { opacity:1; }
+        .tl-arrows { justify-content:flex-start; margin:10px 0 4px; }
+        .tl-arrows .arrow { height:40px; width:52px; }
+
+        /* Painéis de avisos: botões do tamanho do texto, não da largura do ecrã. */
+        .todo-item { align-items:flex-start; }
+        .todo-item .pill, .avail-note .pill, .bday-note .pill { align-self:flex-start; }
+        .todo-panel2 h4 { margin:14px 0 6px; }
+        .avail-note { flex-direction:column; align-items:flex-start; gap:8px; }
+        .avail-note span:first-child, .shame-note span:first-child { min-width:0; }
+
+        /* Pódio: o quinto lugar deixa de ficar sozinho e desalinhado. */
+        .podium-card:last-child:nth-child(odd) { grid-column:span 2; }
+        .board-name { overflow-wrap:anywhere; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
     `}</style>
