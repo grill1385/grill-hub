@@ -109,6 +109,35 @@ function pairwiseNet(purchases) {
   return out;
 }
 
+/* Livro-razão das férias: quem deve a quem, compra a compra.
+   `owe` = dívidas por saldar; `pend` = já marcadas "já paguei" à espera de
+   confirmação do credor (não entram nas somas, mostram-se à parte). */
+function vacLedger(purchases) {
+  const owe = {}, pend = {};
+  const add = (bag, debtor, creditor, pu, amount) => {
+    bag[debtor] = bag[debtor] || {};
+    const cell = (bag[debtor][creditor] = bag[debtor][creditor] || { total: 0, items: [] });
+    cell.total = Math.round((cell.total + amount) * 100) / 100;
+    cell.items.push({ pu, amount });
+  };
+  (purchases || []).forEach((pu) => {
+    const payer = pu.payerId;
+    if (!payer) return;
+    (pu.participants || []).forEach((mid) => {
+      if (mid === payer || pu.settled?.[mid]) return;
+      const a = shareOf(pu, mid);
+      if (a <= 0) return;
+      add(pu.claimed?.[mid] ? pend : owe, mid, payer, pu, a);
+    });
+  });
+  return { owe, pend };
+}
+const ledgerCell = (bag, debtor, creditor) => bag?.[debtor]?.[creditor] || { total: 0, items: [] };
+/* líquido que `debtor` ainda deve a `creditor` depois de abater o sentido contrário
+   (ex.: A deve 1 a B e B deve 2 a A → A→B = 0 e B→A = 1) */
+const ledgerNet = (owe, debtor, creditor) =>
+  Math.round((ledgerCell(owe, debtor, creditor).total - ledgerCell(owe, creditor, debtor).total) * 100) / 100;
+
 const placeName = (p) => (p ? p.city + (p.country ? ` (${p.country})` : "") : "?");
 const endName = (placeId, places) => (placeId ? placeName(places.find((p) => p.id === placeId)) : "Casinha");
 const transportLabel = (t, places) => `${endName(t.fromPlaceId, places)} → ${endName(t.toPlaceId, places)}`;
@@ -1040,6 +1069,32 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 
 /* ---------- Contas ---------- */
 function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment }) {
+  const [view, setView] = useState("compras");   // compras | minhas | gerais
+  const [pair, setPair] = useState(null);         // par aberto em detalhe {aId, bId}
+  const [highlight, setHighlight] = useState(null); // compra a destacar na lista
+
+  const ledger = useMemo(() => vacLedger(purchases), [purchases]);
+  /* participantes: os confirmados nas férias + quem aparece nas compras (histórico) */
+  const people = useMemo(() => {
+    const ids = new Set(members.filter((m) => vac.confirmations?.[m.id]).map((m) => m.id));
+    purchases.forEach((pu) => {
+      if (pu.payerId) ids.add(pu.payerId);
+      (pu.participants || []).forEach((x) => ids.add(x));
+    });
+    return members.filter((m) => ids.has(m.id));
+  }, [members, vac, purchases]);
+
+  /* ao saltar de uma tabela para uma compra, leva-a ao centro do ecrã e pisca */
+  useEffect(() => {
+    if (!highlight || view !== "compras") return;
+    const el = document.getElementById(`vpu-${highlight}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = setTimeout(() => setHighlight(null), 2800);
+    return () => clearTimeout(t);
+  }, [highlight, view]);
+
+  const openPurchase = (id) => { setPair(null); setView("compras"); setHighlight(id); };
+
   /* cada alojamento/transporte com custo gera uma entrada "por registar" (vira compra com 1 clique) */
   const linkedKeys = new Set(purchases.map((x) => x.sourceKey).filter(Boolean));
   const nConf = Object.values(vac.confirmations || {}).filter(Boolean).length;
@@ -1085,6 +1140,24 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         <h3 style={{ margin: 0 }}>Contas</h3>
         {canEdit && <button className="btn ember" onClick={() => onAddPurchase(null)}>+ Compra</button>}
       </div>
+      <div className="segmented" style={{ marginBottom: 14 }}>
+        {[["compras", `Compras (${purchases.length})`], ["minhas", "Minhas contas"], ["gerais", "Contas gerais"]].map(([id, label]) => (
+          <button key={id} className={view === id ? "on" : ""} onClick={() => setView(id)}>{label}</button>
+        ))}
+      </div>
+
+      {view === "minhas" && (
+        <MyAccountsView ledger={ledger} people={people} myMember={myMember} onOpenPair={setPair} />
+      )}
+      {view === "gerais" && (
+        <GeneralAccountsView ledger={ledger} people={people} myMember={myMember} onOpenPair={setPair} />
+      )}
+      {pair && (
+        <PairDetailModal ledger={ledger} members={members} aId={pair.aId} bId={pair.bId}
+          myMember={myMember} onOpenPurchase={openPurchase} onClose={() => setPair(null)} />
+      )}
+
+      {view === "compras" && <>
       {suggestions.length > 0 && (
         <>
           <h4 style={{ margin: "8px 0" }}>Por registar (dos alojamentos e transportes)</h4>
@@ -1116,7 +1189,7 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         const payer = members.find((m) => m.id === pu.payerId);
         const iAmPayer = !!myMember && pu.payerId === myMember.id;
         return (
-          <div key={pu.id} className="purchase">
+          <div key={pu.id} id={`vpu-${pu.id}`} className={`purchase ${highlight === pu.id ? "vpu-hl" : ""}`}>
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               {pu.sourceKey && <span className="vac-chip">{pu.sourceKey.startsWith("stay:") ? "alojamento" : "transporte"}</span>}
@@ -1178,7 +1251,153 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         </div>
       )}
       <p className="hint">Quem deve recebe também lembretes automáticos por email (grillfeup@gmail.com): 3 dias depois da compra e depois semanalmente, enquanto não saldar.</p>
+      </>}
     </div>
+  );
+}
+
+/* ---------- Contas: "Minhas contas" (uma linha por membro) ---------- */
+function MyAccountsView({ ledger, people, myMember, onOpenPair }) {
+  if (!myMember) return <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>;
+  const others = people.filter((m) => m.id !== myMember.id);
+  if (!others.length) return <p className="empty">Ainda não há mais ninguém nas contas destas férias.</p>;
+
+  const rows = others.map((m) => {
+    const iOwe = ledgerCell(ledger.owe, myMember.id, m.id).total;
+    const owesMe = ledgerCell(ledger.owe, m.id, myMember.id).total;
+    const pending = ledgerCell(ledger.pend, myMember.id, m.id).total + ledgerCell(ledger.pend, m.id, myMember.id).total;
+    return { m, iOwe, owesMe, balance: Math.round((owesMe - iOwe) * 100) / 100, pending };
+  }).sort((a, b) => b.balance - a.balance);
+  const total = Math.round(rows.reduce((acc, r) => acc + r.balance, 0) * 100) / 100;
+
+  return (
+    <>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Saldo com cada pessoa, já com as dívidas dos dois sentidos abatidas.
+        Verde = têm de te pagar, vermelho = tens de pagar. Clica numa linha para veres as compras.
+      </p>
+      <div className="vtable-wrap">
+        <table className="vtable">
+          <thead>
+            <tr><th>Membro</th><th className="num col-detail">Eu devo</th><th className="num col-detail">Devem-me</th><th className="num">Saldo</th></tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.m.id} className={r.balance || r.iOwe || r.owesMe ? "clickable" : "muted"}
+                onClick={() => (r.iOwe || r.owesMe) && onOpenPair({ aId: myMember.id, bId: r.m.id })}>
+                <td>
+                  <b>{r.m.name}</b>
+                  {r.pending > 0 && <span className="vpend-tag" title="Pagamentos marcados como feitos, à espera de confirmação">{eur(r.pending)} por confirmar</span>}
+                </td>
+                <td className="num col-detail">{r.iOwe ? eur(r.iOwe) : "—"}</td>
+                <td className="num col-detail">{r.owesMe ? eur(r.owesMe) : "—"}</td>
+                <td className={`num bal ${r.balance > 0 ? "pos" : r.balance < 0 ? "neg" : ""}`}>
+                  {r.balance === 0 ? "0,00 €" : `${r.balance > 0 ? "+" : "−"}${eur(Math.abs(r.balance))}`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          <tfoot>
+            <tr><td><b>Total</b></td><td className="num col-detail" /><td className="num col-detail" />
+              <td className={`num bal ${total > 0 ? "pos" : total < 0 ? "neg" : ""}`}>
+                {total === 0 ? "0,00 €" : `${total > 0 ? "+" : "−"}${eur(Math.abs(total))}`}
+              </td></tr>
+          </tfoot>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/* ---------- Contas: matriz "quem deve a quem" ---------- */
+function GeneralAccountsView({ ledger, people, myMember, onOpenPair }) {
+  if (people.length < 2) return <p className="empty">Ainda não há contas entre membros nestas férias.</p>;
+  const cellOf = (d, c) => {
+    const gross = ledgerCell(ledger.owe, d, c).total + ledgerCell(ledger.owe, c, d).total;
+    return { gross, net: Math.max(0, ledgerNet(ledger.owe, d, c)) };
+  };
+  return (
+    <>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Cada linha é quem deve, cada coluna é a quem deve — já compensado nos dois sentidos
+        (se o A deve 1 € ao B e o B deve 2 € ao A, fica A→B 0 € e B→A 1 €). Clica numa célula para veres as compras.
+      </p>
+      <div className="vtable-wrap">
+        <table className="vtable vmatrix">
+          <thead>
+            <tr>
+              <th className="corner">deve ↓ / a quem →</th>
+              {people.map((c) => <th key={c.id} className="num">{c.name}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            {people.map((d) => (
+              <tr key={d.id} className={myMember && d.id === myMember.id ? "me" : ""}>
+                <th scope="row">{d.name}</th>
+                {people.map((c) => {
+                  if (c.id === d.id) return <td key={c.id} className="diag" />;
+                  const { gross, net } = cellOf(d.id, c.id);
+                  if (!gross) return <td key={c.id} className="num empty-cell">—</td>;
+                  return (
+                    <td key={c.id} className={`num clickable ${net > 0 ? "owed" : "zero"}`}
+                      onClick={() => onOpenPair({ aId: d.id, bId: c.id })}>
+                      {eur(net)}
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
+/* ---------- Detalhe de um par: as compras dos dois sentidos ---------- */
+function PairDetailModal({ ledger, members, aId, bId, myMember, onOpenPurchase, onClose }) {
+  const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+  const label = (id) => (myMember && id === myMember.id ? "Tu" : nm(id));
+  const aToB = ledgerCell(ledger.owe, aId, bId);
+  const bToA = ledgerCell(ledger.owe, bId, aId);
+  const pendAB = ledgerCell(ledger.pend, aId, bId);
+  const pendBA = ledgerCell(ledger.pend, bId, aId);
+  const net = Math.round((aToB.total - bToA.total) * 100) / 100;
+
+  const block = (title, cell) => !cell.items.length ? null : (
+    <>
+      <h4>{title} — {eur(cell.total)}</h4>
+      <div className="mini-list">
+        {cell.items.map(({ pu, amount }, i) => (
+          <button key={`${pu.id}-${i}`} className="mini-item" onClick={() => onOpenPurchase(pu.id)}
+            title="Ver esta compra na lista">
+            <span>{pu.description}<span className="mini-date"> · total {eur(pu.total)} · pagou {nm(pu.payerId)}</span></span>
+            <b className="vmini-amount">{eur(amount)}</b>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
+  return (
+    <VModal title={`${nm(aId)} e ${nm(bId)}`} onClose={onClose} wide>
+      <p className="net-summary" style={{ marginTop: 0 }}>
+        {net > 0 ? <><b>{label(aId)}</b> {label(aId) === "Tu" ? "deves" : "deve"} <b>{eur(net)}</b> a <b>{label(bId)}</b></>
+          : net < 0 ? <><b>{label(bId)}</b> {label(bId) === "Tu" ? "deves" : "deve"} <b>{eur(-net)}</b> a <b>{label(aId)}</b></>
+          : <>Estão quites — as dívidas dos dois lados anulam-se.</>}
+      </p>
+      {block(`${nm(aId)} deve a ${nm(bId)}`, aToB)}
+      {block(`${nm(bId)} deve a ${nm(aId)}`, bToA)}
+      {!aToB.items.length && !bToA.items.length && <p className="empty">Sem dívidas por saldar entre os dois.</p>}
+      {(pendAB.items.length > 0 || pendBA.items.length > 0) && (
+        <>
+          <h4>Já pagos, à espera de confirmação</h4>
+          <p className="hint" style={{ marginTop: 0 }}>Não entram nas somas acima. O credor confirma na lista de compras.</p>
+          {block(`${nm(aId)} → ${nm(bId)}`, pendAB)}
+          {block(`${nm(bId)} → ${nm(aId)}`, pendBA)}
+        </>
+      )}
+    </VModal>
   );
 }
 
@@ -1687,6 +1906,46 @@ function FeriasStyle() {
       .vmap { height: 340px; border-radius: 12px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,.1); overflow: hidden; position: relative; z-index: 0; }
       .vmap-pin { min-width: 26px; padding: 0 5px; box-sizing: border-box; height: 26px; border-radius: 999px; background: #FF7A3D; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
       .vmap .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
+
+      /* Tabelas de contas (Minhas contas / Contas gerais) */
+      .vtable-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 14px;
+        border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+      .vtable { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+      .vtable th, .vtable td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+      .vtable thead th { font-size: 11px; text-transform: uppercase; letter-spacing: .1em; color: var(--muted); font-weight: 600; }
+      .vtable tbody tr:last-child td, .vtable tbody tr:last-child th { border-bottom: none; }
+      .vtable tfoot td { border-top: 1px solid var(--line); border-bottom: none; background: rgba(255,255,255,.03); }
+      .vtable .num { text-align: right; font-variant-numeric: tabular-nums; }
+      .vtable .bal { font-weight: 700; }
+      .vtable .bal.pos { color: #7BD389; }
+      .vtable .bal.neg { color: #FF8A5C; }
+      .vtable tr.clickable { cursor: pointer; }
+      .vtable tr.clickable:hover td { background: var(--surface2); }
+      .vtable tr.muted td { opacity: .55; }
+      .vpend-tag { display: inline-block; margin-left: 8px; font-size: 11px; padding: 1px 7px; border-radius: 999px;
+        border: 1px dashed var(--gold); color: var(--gold); white-space: nowrap; }
+      .vmatrix th[scope="row"] { font-weight: 600; color: var(--text); background: rgba(255,255,255,.03);
+        position: sticky; left: 0; z-index: 1; }
+      .vmatrix .corner { font-size: 10.5px; color: var(--muted); background: var(--surface); position: sticky; left: 0; z-index: 2; }
+      .vmatrix tr.me th[scope="row"] { color: var(--gold); }
+      .vmatrix td.diag { background: repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(255,255,255,.05) 5px, rgba(255,255,255,.05) 10px); }
+      .vmatrix td.empty-cell { color: var(--muted); opacity: .45; }
+      .vmatrix td.owed { color: #FF8A5C; font-weight: 700; }
+      .vmatrix td.zero { color: var(--muted); }
+      .vmatrix td.clickable { cursor: pointer; }
+      .vmatrix td.clickable:hover { background: var(--surface2); }
+      .vmini-amount { white-space: nowrap; margin-left: 10px; }
+      .purchase.vpu-hl { border-color: var(--ember); box-shadow: 0 0 0 1px var(--ember), 0 0 22px rgba(255,122,61,.25); }
+
+      @media (max-width: 760px) {
+        .vtable th, .vtable td { padding: 9px 10px; }
+        .vtable-wrap { border-radius: 10px; }
+        .vmatrix { font-size: 12.5px; }
+        /* no telemóvel só Membro + Saldo: os brutos estão a um toque, no detalhe */
+        .vtable .col-detail { display: none; }
+        .vtable tbody td:first-child { white-space: normal; }
+        .vpend-tag { margin-left: 0; margin-top: 4px; display: block; width: fit-content; }
+      }
 
       @media (max-width: 760px) {
         .vtask-title { min-width: 0; flex: 1 1 100%; }
