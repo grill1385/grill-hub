@@ -2964,8 +2964,11 @@ function Style() {
         .home-grid { flex-direction:column; }
         .todo-panel { width:auto; position:static; }
         .tl-labels { display:none; }
-        .tl-row { grid-template-columns:1fr; }
-        .tl-center { grid-template-columns:1fr; }
+        /* o seletor com [class*=tl-c] tem de bater as variantes .tl-row.tl-c0/c1/c2,
+           senão essas mantêm as 3 colunas no telemóvel */
+        .tl-row, .tl-row[class*="tl-c"] { grid-template-columns:1fr; }
+        .tl-center, .tl-center[class*="tl-c"] { grid-template-columns:1fr; }
+        .tl-row[class*="tl-c"] .tl-right { display:flex; flex-direction:column; align-items:stretch; }
         .tl-arrows { opacity:1; pointer-events:auto; position:static; margin-top:8px; }
         .tl-card { min-height:0; }
         .podium { grid-template-columns:1fr 1fr; gap:10px; }
