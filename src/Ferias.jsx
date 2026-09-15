@@ -1687,6 +1687,17 @@ function FeriasStyle() {
       .vmap { height: 340px; border-radius: 12px; margin-bottom: 14px; border: 1px solid rgba(255,255,255,.1); overflow: hidden; position: relative; z-index: 0; }
       .vmap-pin { min-width: 26px; padding: 0 5px; box-sizing: border-box; height: 26px; border-radius: 999px; background: #FF7A3D; color: #fff; font-weight: 700; font-size: 13px; display: flex; align-items: center; justify-content: center; border: 2px solid #fff; box-shadow: 0 1px 6px rgba(0,0,0,.5); }
       .vmap .leaflet-popup-content { font-size: 13px; line-height: 1.45; }
+
+      @media (max-width: 760px) {
+        .vtask-title { min-width: 0; flex: 1 1 100%; }
+        .vtask-main { align-items: center; gap: 8px 10px; }
+        .vtask .btn.small { margin-left: auto; }
+        .vplace-info .klabel { min-width: 0; display: block; margin-bottom: 0; }
+        .vplace-info { gap: 10px; }
+        .vmap { height: 260px; }
+        .vac-chip.big { font-size: 12.5px; }
+        .vlinks a, .vlink-row a { overflow-wrap: anywhere; word-break: normal; }
+      }
     `}</style>
   );
 }

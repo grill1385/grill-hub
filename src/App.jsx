@@ -783,16 +783,18 @@ export default function App() {
           {[
             ["home", "Home"],
             ["eventos", "Eventos"],
-            ["disponibilidade", "Mapa de Disponibilidade"],
-            ["ferias", "Férias do Grill"],
+            ["disponibilidade", "Mapa de Disponibilidade", "Disponibilidade"],
+            ["ferias", "Férias do Grill", "Férias"],
             ["scoreboard", "Scoreboard"],
             ["membros", "Membros"],
             ["media", "Media"],
             ["hierarquia", "Hierarquia"],
             ...(isAdmin ? [["admin", "Gestão"]] : []),
-          ].map(([id, label]) => (
+          ].map(([id, label, short]) => (
             <button key={id} className={`navbtn ${tab === id ? "active" : ""}`} onClick={() => setTab(id)}>
-              {label}
+              {short
+                ? <><span className="nav-long">{label}</span><span className="nav-short">{short}</span></>
+                : label}
               {id === "admin" && pendingProfiles.length > 0 && <span className="badge">{pendingProfiles.length}</span>}
               {id === "disponibilidade" && myMember && availMissingCount > 0 && <span className="badge">{availMissingCount}</span>}
             </button>
@@ -2660,11 +2662,12 @@ function Style() {
       .navbtn { text-align:left; background:none; border:none; color:var(--muted); padding:10px 12px; border-radius:8px; cursor:pointer; font:inherit; font-weight:500; border-left:3px solid transparent; }
       .navbtn:hover { color:var(--text); background:var(--surface); }
       .navbtn.active { color:var(--text); background:var(--surface); border-left-color:var(--ember); }
+      .nav-short { display:none; }
       .content { flex:1; padding:24px 28px; min-width:0; }
 
       .section-head { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:18px; flex-wrap:wrap; }
       .head-actions { display:flex; gap:10px; align-items:center; }
-      .segmented { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+      .segmented { display:flex; flex-wrap:wrap; border:1px solid var(--line); border-radius:8px; overflow:hidden; max-width:100%; }
       .segmented button { background:none; border:none; color:var(--muted); padding:7px 12px; cursor:pointer; font:inherit; font-size:13px; }
       .segmented button.on { background:var(--surface2); color:var(--text); }
 
@@ -2679,8 +2682,8 @@ function Style() {
       .iconbtn:hover { color:var(--ember); background:var(--surface2); }
 
       .card { background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:16px; }
-      .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(360px, 1fr)); gap:10px; align-items:start; }
-      .cards.grid2 { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); }
+      .cards { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(360px, 100%), 1fr)); gap:10px; align-items:start; }
+      .cards.grid2 { display:grid; grid-template-columns:repeat(auto-fill, minmax(min(240px, 100%), 1fr)); }
       .event-card { cursor:pointer; transition:border-color .15s; }
       .event-card:hover { border-color:var(--ember); }
       .event-top { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
@@ -2969,9 +2972,53 @@ function Style() {
         .topbar { padding:10px 12px; }
         input, select, textarea { font-size:16px; }
         .purchase-head { flex-wrap:wrap; }
+        .purchase-head strong { flex:1 1 100%; }
         .shares-grid { grid-template-columns:1fr 1fr; }
         .modal { max-height:92vh; }
         .actions { flex-wrap:wrap; }
+      }
+      /* ---------- Telemóvel (retrato): nada cortado, tudo ao alcance do polegar ---------- */
+      @media (max-width: 760px) {
+        /* Sub-abas (Resumo / Locais / Alojamento / Transportes / Contas, filtros, etc.):
+           viram chips que mudam de linha, em vez de uma barra que cortava os últimos
+           botões e só os mostrava com o telemóvel deitado. */
+        .segmented { border:none; border-radius:0; overflow:visible; gap:8px; }
+        .segmented button { border:1px solid var(--line); border-radius:999px; background:var(--surface);
+          padding:9px 14px; font-size:13.5px; min-height:40px; flex:0 1 auto; white-space:nowrap; }
+        .segmented button.on { background:linear-gradient(135deg, rgba(255,122,61,.20), rgba(245,184,65,.10));
+          border-color:var(--ember); color:var(--text); font-weight:600; }
+
+        /* Barra de abas principal: rótulos curtos e um esbatido nas pontas a indicar
+           que há mais abas para o lado. */
+        .sidebar { gap:6px; scrollbar-width:none; -webkit-overflow-scrolling:touch;
+          -webkit-mask-image:linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%);
+          mask-image:linear-gradient(90deg, transparent 0, #000 12px, #000 calc(100% - 12px), transparent 100%); }
+        .sidebar::-webkit-scrollbar { display:none; }
+        .navbtn { padding:9px 10px; }
+        .nav-long { display:none; }
+        .nav-short { display:inline; }
+
+        /* Nunca deslizar a página para o lado. */
+        .grill-root { overflow-x:hidden; }
+        .card, .event-card, .mini-item { min-width:0; }
+        .mini-item { gap:10px; }
+        a, .desc, .mini-item strong { overflow-wrap:anywhere; }
+
+        /* Alvos de toque maiores. */
+        .btn { min-height:44px; padding:11px 16px; }
+        .btn.small { min-height:36px; padding:7px 12px; }
+        .iconbtn { padding:8px; }
+        .pill { padding:8px 14px; }
+        .actions .btn { flex:1 1 140px; }
+
+        /* Modais como folha que sobe do fundo: mais espaço útil e botões perto do polegar. */
+        .overlay { padding:0; align-items:flex-end; }
+        .modal, .modal.wide { max-width:none; max-height:92vh; border-radius:16px 16px 0 0; border-bottom:none; }
+        .modal-body { padding-bottom:calc(22px + env(safe-area-inset-bottom, 0px)); }
+
+        /* Balão de dívidas: fica dentro do ecrã em vez de sair pela direita. */
+        .debt-tip { left:auto; right:0; transform:none; min-width:0;
+          width:min(280px, calc(100vw - 48px)); white-space:normal; }
       }
       @media (prefers-reduced-motion: reduce) { * { transition:none !important; } }
     `}</style>
