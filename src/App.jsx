@@ -6,7 +6,7 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
      (email+password ou Google) para gerir
    - Dados em tabelas Supabase com RLS (ver src/api.js)
    ============================================================ */
-import { api, supabase, availabilityApi } from "./api.js";
+import { api, supabase, availabilityApi, fetchBackup, BACKUP_TABLES } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MediaTab from "./Media.jsx";
@@ -1830,7 +1830,9 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
                 if (!m) return null;
                 const done = isSet(mid);
                 const claimed = !done && !!pu.claimed?.[mid];
-                const canConfirm = (isAdmin || iAmPayer) && mid !== pu.payerId;
+                /* só quem pagou a compra confirma que recebeu — nem os admins,
+                   para ninguém saldar por engano a conta de outra pessoa */
+                const canConfirm = iAmPayer && mid !== pu.payerId;
                 const isMe = !!myMember && mid === myMember.id && mid !== pu.payerId;
                 const onClick = canConfirm
                   ? () => onToggleSettled(pu, mid)
@@ -2548,6 +2550,67 @@ function LinkRow({ profile, members, onLink, onDismiss }) {
   );
 }
 
+/* Cópia de segurança: lê todas as tabelas e grava um .json no computador.
+   Só leitura — não escreve nem apaga nada no Supabase. */
+function BackupPanel({ showToast }) {
+  const [busy, setBusy] = useState(false);
+  const [log, setLog] = useState([]);
+  const [last, setLast] = useState(null);
+
+  async function run() {
+    setBusy(true); setLog([]); setLast(null);
+    try {
+      const dump = await fetchBackup((tabela, n) =>
+        setLog((l) => [...l, { tabela, n }]));
+      const nomes = Object.keys(dump.erros || {});
+      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-");
+      const blob = new Blob([JSON.stringify(dump, null, 2)], { type: "application/json" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `grillhub-backup-${stamp}.json`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+      setLast(dump);
+      showToast(nomes.length
+        ? `Cópia guardada, mas ${nomes.length} tabela(s) deram erro: ${nomes.join(", ")}`
+        : "Cópia de segurança guardada nas transferências 💾");
+    } catch (e) {
+      showToast("Não foi possível fazer a cópia: " + (e?.message || e));
+    } finally { setBusy(false); }
+  }
+
+  const totalLinhas = last ? Object.values(last.contagens).reduce((a, b) => a + b, 0) : 0;
+  return (
+    <>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Descarrega um ficheiro <b>.json</b> com tudo o que está no GrillHub — membros, eventos,
+        presenças, contas, férias, media e disponibilidades. É uma leitura: não altera nem apaga nada.
+        Guarda o ficheiro antes de mudanças grandes; serve para repor qualquer coisa que se perca.
+      </p>
+      <div className="card admin-card">
+        <h4>Descarregar cópia de tudo</h4>
+        <p className="hint" style={{ marginTop: 0 }}>{BACKUP_TABLES.length} tabelas.</p>
+        <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <button className="btn ember" disabled={busy} onClick={run}>
+            {busy ? "A descarregar…" : "Descarregar cópia de segurança 💾"}
+          </button>
+        </div>
+        {log.length > 0 && (
+          <div className="mini-list" style={{ marginTop: 12 }}>
+            {log.map(({ tabela, n }) => (
+              <div key={tabela} className="mini-item static">
+                <span>{tabela}</span>
+                <b style={{ color: n < 0 ? "var(--danger)" : undefined }}>{n < 0 ? "erro" : `${n} linhas`}</b>
+              </div>
+            ))}
+          </div>
+        )}
+        {last && <p className="hint">Total: <b>{totalLinhas}</b> linhas guardadas em <b>grillhub-backup-…json</b>.</p>}
+      </div>
+    </>
+  );
+}
+
 function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismiss, onAddAdmin, onRemoveAdmin, events, onSaveEvent, showToast, places, onSavePlace, onDeletePlace, onEditEvent }) {
   const [email, setEmail] = useState(""); const [err, setErr] = useState(null);
   const [sub, setSub] = useState("geral"); // 'geral' | 'eventos'
@@ -2561,9 +2624,10 @@ function AdminPanel({ admins, isMain, pendingProfiles, members, onLink, onDismis
         <button className={sub === "eventos" ? "on" : ""} onClick={() => setSub("eventos")}>
           Gestão de eventos{semLocal > 0 ? ` (${semLocal})` : ""}
         </button>
+        <button className={sub === "backup" ? "on" : ""} onClick={() => setSub("backup")}>Cópia de segurança</button>
       </div>
 
-      {sub === "eventos" ? (
+      {sub === "backup" ? <BackupPanel showToast={showToast} /> : sub === "eventos" ? (
         <>
           <p className="hint" style={{ marginTop: 0 }}>Associa localizações aos eventos que ainda não têm — por link do Google Maps ou clicando no mapa. Assim que associas, o evento sai da lista e a bola aparece no mapa (e na vista de Mapa dos Eventos).</p>
           <EventLocationManager events={events || []} onSaveEvent={onSaveEvent} showToast={showToast} places={places || []} onSavePlace={onSavePlace} onDeletePlace={onDeletePlace} onEditEvent={onEditEvent} />

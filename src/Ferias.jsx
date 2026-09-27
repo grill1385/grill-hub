@@ -1071,6 +1071,7 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment }) {
   const [view, setView] = useState("compras");   // compras | minhas | gerais
   const [pair, setPair] = useState(null);         // par aberto em detalhe {aId, bId}
+  const [detail, setDetail] = useState(null);     // id da compra aberta em detalhe
   const [highlight, setHighlight] = useState(null); // compra a destacar na lista
 
   const ledger = useMemo(() => vacLedger(purchases), [purchases]);
@@ -1156,6 +1157,18 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         <PairDetailModal ledger={ledger} members={members} aId={pair.aId} bId={pair.bId}
           myMember={myMember} onOpenPurchase={openPurchase} onClose={() => setPair(null)} />
       )}
+      {detail && (() => {
+        /* procura sempre a versão mais recente da compra, para o detalhe
+           refletir de imediato o que se marca lá dentro */
+        const pu = purchases.find((x) => x.id === detail);
+        if (!pu) return null;
+        return (
+          <VPurchaseDetailModal pu={pu} members={members} myMember={myMember} isAdmin={isAdmin}
+            onToggleSettled={onToggleSettled} onClaimPayment={onClaimPayment}
+            onEdit={() => { setDetail(null); onEditPurchase(pu.id); }}
+            onClose={() => setDetail(null)} />
+        );
+      })()}
 
       {view === "compras" && <>
       {suggestions.length > 0 && (
@@ -1188,47 +1201,30 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         const claimedSum = Math.round(parts.filter((mid) => !isSet(mid) && pu.claimed?.[mid]).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100;
         const payer = members.find((m) => m.id === pu.payerId);
         const iAmPayer = !!myMember && pu.payerId === myMember.id;
+        const pct = pu.total > 0 ? Math.min(100, Math.round((totalSettled / pu.total) * 100)) : 0;
+        /* cartão em modo resumo: descrição, total, quem pagou e quanto falta.
+           Tudo o resto (participantes, parcelas, ações) abre no detalhe. */
         return (
-          <div key={pu.id} id={`vpu-${pu.id}`} className={`purchase ${highlight === pu.id ? "vpu-hl" : ""}`}>
+          <div key={pu.id} id={`vpu-${pu.id}`}
+            className={`purchase vpu-row ${highlight === pu.id ? "vpu-hl" : ""}`}
+            onClick={() => setDetail(pu.id)} title="Ver detalhes desta compra">
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               {pu.sourceKey && <span className="vac-chip">{pu.sourceKey.startsWith("stay:") ? "alojamento" : "transporte"}</span>}
               <span className="purchase-total">{eur(pu.total)}</span>
-              {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>✎</button>}
+              {(isAdmin || iAmPayer) && (
+                <button className="iconbtn" title="Editar compra"
+                  onClick={(e) => { e.stopPropagation(); onEditPurchase(pu.id); }}>✎</button>
+              )}
             </div>
-            <div className="hint" style={{ marginTop: 0 }}>
-              Pagar a <b>{payer?.name || "?"}</b> · {pu.split === "custom" ? (pu.parcels?.length ? "por parcelas" : "valores individuais") : `${eur(shareOf(pu, parts[0]))} por pessoa`} · saldado {eur(totalSettled)} de {eur(pu.total)}{claimedSum > 0 && <> · <b>{eur(claimedSum)} por confirmar</b></>}
+            <div className="vpu-meta">
+              <span>pagou <b>{payer?.name || "?"}</b></span>
+              <span className="vpu-sep">·</span>
+              <span>{pct === 100 ? "tudo saldado" : `falta ${eur(pu.total - totalSettled)}`}</span>
+              {claimedSum > 0 && <><span className="vpu-sep">·</span><span className="vpu-claim">{eur(claimedSum)} por confirmar</span></>}
+              <span className="vpu-more">detalhes →</span>
             </div>
-            {pu.parcels?.length > 0 && (
-              <div className="hint parcel-line" style={{ marginTop: 0 }}>
-                {pu.parcels.map((pc, i) => {
-                  const names = (pc.members || []).map((x) => members.find((m) => m.id === x)?.name || "?").join(", ");
-                  return <span key={pc.id || i}>{i > 0 ? " · " : ""}{pc.name || "Parcela"} <b>{eur(pc.price)}</b> ({names || "por atribuir"})</span>;
-                })}
-              </div>
-            )}
-            <div className="pill-row">
-              {parts.map((mid) => {
-                const m = members.find((x) => x.id === mid);
-                if (!m) return null;
-                const done = isSet(mid);
-                const claimed = !done && !!pu.claimed?.[mid];
-                const canConfirm = (isAdmin || iAmPayer) && mid !== pu.payerId;
-                const isMe = !!myMember && mid === myMember.id && mid !== pu.payerId;
-                const onClick = canConfirm
-                  ? () => onToggleSettled(pu, mid)
-                  : isMe && !done ? () => onClaimPayment(pu, mid, !claimed) : undefined;
-                return (
-                  <button key={mid} className={`pill ${done ? "on" : claimed ? "claim" : ""}`}
-                    title={mid === pu.payerId ? "Pagou a compra"
-                      : canConfirm ? (claimed ? "Confirmar que recebeste" : "Marcar como saldado")
-                      : isMe && !done ? (claimed ? "Anular o «já paguei»" : "Marcar que já pagaste") : ""}
-                    onClick={onClick}>
-                    {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : claimed ? " · pagou? por confirmar" : ` · deve ${eur(shareOf(pu, mid))}`}
-                  </button>
-                );
-              })}
-            </div>
+            <div className="vpu-bar"><i style={{ width: `${pct}%` }} /></div>
           </div>
         );
       })}
@@ -1253,6 +1249,95 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
       <p className="hint">Quem deve recebe também lembretes automáticos por email (grillfeup@gmail.com): 3 dias depois da compra e depois semanalmente, enquanto não saldar.</p>
       </>}
     </div>
+  );
+}
+
+/* ---------- Detalhe de uma compra das férias ----------
+   Tudo o que saiu do cartão: divisão, parcelas, participantes e as ações
+   (marcar "já paguei" / o credor confirmar que recebeu). */
+function VPurchaseDetailModal({ pu, members, myMember, isAdmin, onToggleSettled, onClaimPayment, onEdit, onClose }) {
+  const parts = pu.participants || [];
+  const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
+  const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
+  const claimedSum = Math.round(parts.filter((mid) => !isSet(mid) && pu.claimed?.[mid]).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100;
+  const payer = members.find((m) => m.id === pu.payerId);
+  const iAmPayer = !!myMember && pu.payerId === myMember.id;
+
+  return (
+    <VModal title={pu.description} onClose={onClose} wide>
+      <div className="detail-grid" style={{ marginBottom: 14 }}>
+        <div><span className="klabel">Total</span><b className="purchase-total">{eur(pu.total)}</b></div>
+        <div><span className="klabel">Pagou</span>{payer?.name || "?"}</div>
+        <div><span className="klabel">Divisão</span>
+          {pu.split === "custom" ? (pu.parcels?.length ? "por parcelas" : "valores individuais")
+            : `${eur(shareOf(pu, parts[0]))} por pessoa`}
+        </div>
+        <div><span className="klabel">Saldado</span>{eur(totalSettled)} de {eur(pu.total)}
+          {claimedSum > 0 && <><br /><span className="vpu-claim">{eur(claimedSum)} por confirmar</span></>}
+        </div>
+      </div>
+
+      {pu.parcels?.length > 0 && (
+        <>
+          <h4>Parcelas</h4>
+          <div className="mini-list">
+            {pu.parcels.map((pc, i) => (
+              <div key={pc.id || i} className="mini-item static">
+                <span>{pc.name || "Parcela"}<span className="mini-date"> · {(pc.members || []).map((x) => members.find((m) => m.id === x)?.name || "?").join(", ") || "por atribuir"}</span></span>
+                <b className="vmini-amount">{eur(pc.price)}</b>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      <h4>Quem entra nesta compra</h4>
+      <div className="pill-row">
+        {parts.map((mid) => {
+          const m = members.find((x) => x.id === mid);
+          if (!m) return null;
+          const done = isSet(mid);
+          const claimed = !done && !!pu.claimed?.[mid];
+          const canConfirm = iAmPayer && mid !== pu.payerId;   // só o credor confirma
+          const isMe = !!myMember && mid === myMember.id && mid !== pu.payerId;
+          const onClick = canConfirm
+            ? () => onToggleSettled(pu, mid)
+            : isMe && !done ? () => onClaimPayment(pu, mid, !claimed) : undefined;
+          return (
+            <button key={mid} className={`pill ${done ? "on" : claimed ? "claim" : ""}`}
+              style={onClick ? undefined : { cursor: "default" }}
+              title={mid === pu.payerId ? "Pagou a compra"
+                : canConfirm ? (claimed ? "Confirmar que recebeste" : "Marcar como saldado")
+                : isMe && !done ? (claimed ? "Anular o «já paguei»" : "Marcar que já pagaste") : ""}
+              onClick={onClick}>
+              {m.name}{mid === pu.payerId ? " · pagou" : done ? " · saldado" : claimed ? " · pagou? por confirmar" : ` · deve ${eur(shareOf(pu, mid))}`}
+            </button>
+          );
+        })}
+      </div>
+      <p className="hint">
+        {iAmPayer
+          ? "Como foste tu que pagaste, és tu que confirmas quem já te pagou — clica no nome."
+          : "Se já pagaste a tua parte, clica no teu nome. Quem pagou a compra confirma depois."}
+      </p>
+
+      {pu.receipts?.length > 0 && (
+        <>
+          <h4>Faturas</h4>
+          <div className="receipts">
+            {pu.receipts.map((u, i) => (
+              <a key={i} href={u} target="_blank" rel="noreferrer"><img src={u} alt={`fatura ${i + 1}`} /></a>
+            ))}
+          </div>
+        </>
+      )}
+
+      {(isAdmin || iAmPayer) && (
+        <div className="actions" style={{ justifyContent: "flex-start" }}>
+          <button className="btn ghost" onClick={onEdit}>Editar compra</button>
+        </div>
+      )}
+    </VModal>
   );
 }
 
@@ -1935,6 +2020,17 @@ function FeriasStyle() {
       .vmatrix td.clickable { cursor: pointer; }
       .vmatrix td.clickable:hover { background: var(--surface2); }
       .vmini-amount { white-space: nowrap; margin-left: 10px; }
+
+      /* Compras em modo resumo (o detalhe abre num painel próprio) */
+      .vpu-row { cursor: pointer; transition: border-color .15s; gap: 6px; }
+      .vpu-row:hover { border-color: var(--ember); }
+      .vpu-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
+      .vpu-meta b { color: var(--text); font-weight: 600; }
+      .vpu-sep { opacity: .5; }
+      .vpu-claim { color: var(--gold); }
+      .vpu-more { margin-left: auto; color: #F5C168; opacity: .85; white-space: nowrap; }
+      .vpu-bar { height: 4px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+      .vpu-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--ember), var(--gold)); }
       .purchase.vpu-hl { border-color: var(--ember); box-shadow: 0 0 0 1px var(--ember), 0 0 22px rgba(255,122,61,.25); }
 
       @media (max-width: 760px) {

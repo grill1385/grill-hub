@@ -52,7 +52,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 
 - Qualquer membro cria compras, mas só consigo próprio como credor (payer bloqueado na UI; RLS "membro cria como credor"/"membro edita as suas" em `purchases` exige payer_member_id = my_member_id(); em `vacation_purchases` a política de membros já cobria). O credor edita/elimina as suas compras; admins tudo.
 - Devedor marca "já paguei" → `claimed[mid]=true` via RPCs `claim_my_payment`/`claim_my_vacation_payment` (só participantes, bloqueado se já saldado). `claimed` fica FORA de fromPurchase/fromVPurchase (só muda via RPC, para upserts não pisarem). Pill tracejada dourada "pagou? por confirmar" (.pill.claim).
-- Credor (ou admin) confirma → settled (upsert normal). Devedor com claimed deixa de ser notificado (Home, mailto de lembrete e send-debt-reminders.mjs ignoram claimed); na Home do credor aparece "Pagamentos a confirmar" (secção no painel Contas, botão Confirmar).
+- Credor confirma → settled (upsert normal). **Só o credor** — `canConfirm = iAmPayer && mid !== payerId` em App.jsx e Ferias.jsx; os admins deixaram de poder saldar contas de terceiros na UI (set/2026), para ninguém marcar por engano a conta de outra pessoa. A RLS continua a permitir admin (válvula de manutenção). Devedor com claimed deixa de ser notificado (Home, mailto de lembrete e send-debt-reminders.mjs ignoram claimed); na Home do credor aparece "Pagamentos a confirmar" (secção no painel Contas, botão Confirmar).
 
 ## Aniversários (Home, jul 2026)
 
@@ -74,6 +74,10 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Mapa de Disponibilidade (ago 2026). Pré-requisito: `setup-disponibilidades.sql` corrido no SQL Editor — confirmar com o David.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
+## Cópia de segurança (set/2026)
+
+- Gestão › «Cópia de segurança»: botão que descarrega um `.json` com todas as tabelas (`BACKUP_TABLES` + `fetchBackup` em api.js, paginado a 1000 linhas). É só `select` — não escreve nada. Usar antes de qualquer mudança com migração.
+
 ## Convenções
 
 - Media (aba, `src/Media.jsx`): 3 secções (documentos, manga, fotos) sobre a tabela `media_entries` (árvore: parent_id, kind folder/file, title, url, mime, size_bytes, uploaded_by, created_at). Ficheiros no bucket `grill` em `media/<section>/<id>.<ext>`. Escrita: documentos e manga só admins; fotos qualquer membro (RLS `escrita media`). Blocos com título e data e ícones SVG vetorizados (MIcon: folder/doc/pdf/photo/book); pastas aninháveis sem limite; viewer com imagem/PDF (iframe), abrir e descarregar. Suporta imagens, vídeos (fotos: image/*,video/*; thumbnail = 1º frame + play; viewer com <video>) e PDF. O mangá usa a capa `public/manga-cover.png` como thumbnail (secção e ficheiros não-imagem), com fallback para o ícone de livro se o ficheiro não existir. Pré-requisito: `setup-media.sql` corrido no SQL Editor.
@@ -82,6 +86,8 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Parcelas (split custom, eventos e férias): coluna `parcels` jsonb = [{id, name, price, members[]}]; cada parcela divide o preço pelos membros associados (associação opcional — «por atribuir»); shareOf (App.jsx, Ferias.jsx e send-debt-reminders.mjs) soma parcelas quando existem, senão usa `shares` (compras antigas mantêm a grelha manual — legacyShares). Total e participants derivados das parcelas no submit. Formulários com editor de parcelas; cartões mostram linha de parcelas.
 - Importação de compras por Excel: botão «Importar Excel» (admins) nas Contas do evento → ImportPurchasesModal; template `public/template-compras.xlsx` (folhas Compras+Instruções; linhas «(exemplo)» ignoradas; divisão «todos» = 1 linha, «parcelas» = 1 linha por parcela com o mesmo nome de Compra; Membros e Pagador opcionais — pagador vazio = admin que importa; erros bloqueiam a importação).
 - «Saldos a acertar» (pairwiseNet) também na sub-aba Contas das férias (Ferias.jsx tem cópia própria de pairwiseNet).
+- Férias › Contas tem 3 vistas (`view` em ContasView): «Compras» (lista), «Minhas contas» (saldo líquido por membro) e «Contas gerais» (matriz quem deve × a quem, diagonal vazia, valores compensados). Base de cálculo: `vacLedger` → `{owe, pend}` (pend = «já paguei» por confirmar, fora das somas), `ledgerCell` e `ledgerNet`. Clicar numa linha/célula abre `PairDetailModal`; clicar numa compra aí salta para a lista e destaca-a (`vpu-<id>` + `.vpu-hl`).
+- Compras das férias em modo resumo (`.vpu-row`): descrição, tipo, total, quem pagou, quanto falta e barra de progresso; participantes, parcelas, faturas e as ações vivem no `VPurchaseDetailModal`.
 - pairwiseNet do App.jsx (eventos) devolve também items (dívidas do devedor por evento/compra, com data do evento), offsets (a abater) e since (evento mais antigo); idade = daysSince(since). A cópia das Férias mantém a versão simples.
 - Home: «Contas a receber 💰» (net por par) com idade («há X dias») também no «a pagar»; botão «Enviar lembrete por email 📧» (mailto do próprio credor) com descritivo por evento/compra e compensações.
 - Células de contas na Home são clicáveis → DebtDetailModal (dívidas por evento/compra, abatimentos e líquido).

@@ -345,3 +345,38 @@ export const mediaApi = {
   async save(m) { const { error } = await supabase.from("media_entries").upsert(fromMedia(m)); if (error) throw error; },
   async remove(id) { const { error } = await supabase.from("media_entries").delete().eq("id", id); if (error) throw error; },
 };
+
+/* ============================================================
+   Backup — cópia de segurança de TODAS as tabelas.
+   Só faz leituras (select). Nunca escreve, nunca apaga.
+   Serve para guardar o estado atual antes de qualquer mudança.
+   ============================================================ */
+export const BACKUP_TABLES = [
+  "members", "events", "roles", "admins", "purchases", "profiles", "event_places",
+  "vacations", "vacation_places", "vacation_stays", "vacation_transports", "vacation_tasks",
+  "vacation_purchases", "media_entries", "availabilities", "birthday_wishes", "debt_shames",
+];
+
+export async function fetchBackup(onProgress) {
+  const tabelas = {}, erros = {};
+  for (const t of BACKUP_TABLES) {
+    const linhas = [];
+    let from = 0;
+    for (;;) {
+      const { data, error } = await supabase.from(t).select("*").range(from, from + 999);
+      if (error) { erros[t] = error.message; break; }
+      linhas.push(...(data || []));
+      if ((data || []).length < 1000) break;   // última página
+      from += 1000;
+    }
+    tabelas[t] = linhas;
+    onProgress?.(t, erros[t] ? -1 : linhas.length);
+  }
+  return {
+    grillhub_backup: 1,
+    feito_em: new Date().toISOString(),
+    contagens: Object.fromEntries(Object.entries(tabelas).map(([k, v]) => [k, v.length])),
+    erros,
+    tabelas,
+  };
+}
