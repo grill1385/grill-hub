@@ -47,22 +47,48 @@ ninguém a consegue confirmar pela interface. Verificar com o David.
   férias → `FeriasTab` com `jump={vacationId, purchaseId}`, abre Contas e destaca `vpu-<id>`.
 - Testado com dados falsos (página local com o Supabase bloqueado), secretária e telemóvel.
 
-### Fase 3 — arquivar contas saldadas (feature 4). Migração só de adição.
-`alter table ... add column if not exists archived boolean not null default false` em
-`purchases` e `vacation_purchases`. Filtro «Ver contas arquivadas». Arquivar não altera valores.
+### Fase 3 — arquivar contas saldadas (feature 4). FEITA (27 set 2026).
+Migração `supabase/setup-contas-arquivo.sql` (só adições):
+- coluna `archived boolean not null default false` em `purchases` e `vacation_purchases`
+  (fora de fromPurchase/fromVPurchase, para os upserts não a pisarem);
+- `purchase_is_settled(...)` — mesma regra do `isFullySettled` (ledger.js): todos com parte > 0 saldados;
+- RPC `set_purchase_archived(origin, id, value)` — só credor ou admin; arquivar exige saldada;
+- RPC `set_purchase_settled(origin, id, member, value)` — confirmar um pagamento mexe só em
+  `settled[member]` (antes era upsert da linha inteira, que podia pisar recibos confirmados entretanto).
+  App.jsx/Ferias.jsx usam-no e só caem para o upsert antigo se a função ainda não existir.
+UI: botão Arquivar/Desarquivar no detalhe do evento, no detalhe da compra das férias e em
+«As Minhas Contas» (+ «Arquivar as N saldadas que pagaste»); filtro «Ver arquivadas» nos três.
+Nos saldos as arquivadas valem 0 de qualquer forma (estão saldadas).
 
-### Fase 4 — recibos (features 3 e 1). A maior.
-- Tabelas novas (só `create table if not exists`): `receipts` (id curto para MB Way/Revolut,
-  from_member_id, to_member_id, total, estado, created_at, paid_at) e `receipt_items`
-  (receipt_id, origem 'event'|'vacation', purchase_id, member_id, amount).
-- «Associar todas as contas de [membro]» junta num recibo tudo o que A deve a B por saldar.
-- A marca o recibo como pago -> todas as contas do recibo passam a «por verificar» de uma vez
-  (feature 1), em vez de uma a uma.
-- B recebe notificação nas Contas com o ID do recibo, abre, vê o conteúdo e confirma; as contas
-  ficam saldadas e associadas ao recibo, o que permite distinguir depois o que foi pago em
-  conjunto e o que foi pago em separado.
-- O ID serve para o descritivo da transferência MB Way/Revolut.
-- Escrita por RPC `security definer` que altera só `settled[member]` de cada compra do recibo.
+### Fase 4 — recibos (features 3 e 1). FEITA (27 set 2026).
+Migração `supabase/setup-contas-recibos.sql` (só adições; correr depois da Fase 3):
+- `receipts` (id «GR-XXXXXX» sem caracteres ambíguos, from/to, total líquido, status
+  aberto|pago|confirmado|cancelado, created/paid/confirmed_at) e `receipt_items`
+  (receipt_id, origin, purchase_id, member_id = devedor da linha, amount). Leitura pública; escrita só por RPC.
+- `create_receipt(p_to, p_items)`: valida cada linha (dívida real entre os dois, por saldar, não
+  presa noutro recibo em aberto), 1 recibo em aberto por par/sentido, total = líquido > 0.
+  **Decisão:** o recibo inclui também as dívidas de B para A «a abater», para o valor bater com o
+  saldo líquido que a app mostra; ao confirmar, essas linhas também ficam saldadas.
+- `pay_receipt` (A): recibo → pago; `claimed[A]=true` nas linhas de A (feature 1).
+- `confirm_receipt` (B): → confirmado; `settled[devedor]=true` em todas as linhas.
+- `reopen_receipt` (A «afinal ainda não paguei» / B «não recebi»): pago → aberto; tira o claimed.
+- `cancel_receipt` (A, só em aberto). Ajudante `_receipt_mark` sem execute para ninguém.
+UI (Contas.jsx): «Criar recibo» no detalhe de cada pessoa a quem deves (pré-visualização com
+linhas a pagar e a abater); cartões de recibos ativos no topo; detalhe com ID para copiar e ações;
+histórico; «Pago em recibo» no detalhe de cada conta e etiqueta «recibo GR-…» na lista.
+Notificação: badge na barra lateral (recibos pagos a mim por confirmar) e linha na Home em
+«Pagamentos a confirmar» (as compras desse recibo deixam de aparecer uma a uma).
+
+Os botões novos só aparecem depois das migrações (`archiveReady` / `receiptsReady` em api.js),
+por isso o código pode ser publicado antes ou depois de correr o SQL.
+
+Testado: SQL em Postgres local (PGlite, 28 verificações, incluindo «os valores das compras nunca
+mudam»); UI de ponta a ponta com PGlite no browser e dados falsos (criar, pagar, reabrir, confirmar,
+cancelar, arquivar, com e sem migração, secretária e telemóvel).
+
+### Ideias para depois
+- Email ao credor quando um recibo é marcado como pago (Edge Function, como `birthday-wish`).
+- `send-debt-reminders.mjs` podia mencionar recibos em aberto.
 
 ## Decisões tomadas com o David
 

@@ -4,22 +4,26 @@ import React, { useEffect, useMemo, useState } from "react";
    AS MINHAS CONTAS
    Junta, para o membro com sessão iniciada, as contas dos eventos
    (`purchases`) e das férias (`vacation_purchases`).
-   SÓ LEITURA: nada aqui escreve na base de dados — pagar, confirmar
-   e editar continuam a fazer-se no evento / nas férias de origem.
+   Leituras: tudo. Escritas: só por RPC cirúrgica (contasApi) —
+   arquivar contas saldadas e recibos (pagar várias contas de uma vez).
+   Pagar/confirmar uma conta avulsa e editar continuam na origem.
    ============================================================ */
-import { feriasApi } from "./api.js";
-import { shareOf, buildLedger, ledgerCell } from "./ledger.js";
+import { feriasApi, contasApi, isMissingRpc } from "./api.js";
+import { shareOf, buildLedger, ledgerCell, isFullySettled } from "./ledger.js";
 
 const eur = (n) => `${(Math.round(n * 100) / 100).toFixed(2).replace(".", ",")} €`;
 const norm = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").trim().toLowerCase();
 const round2 = (n) => Math.round(n * 100) / 100;
 function fmtDate(iso) {
   if (!iso) return "sem data";
-  const [y, m, d] = iso.split("-");
+  const [y, m, d] = iso.slice(0, 10).split("-");
   return `${d}/${m}/${y}`;
 }
 const signed = (v) => (v === 0 ? "0,00 €" : `${v > 0 ? "+" : "−"}${eur(Math.abs(v))}`);
 const balClass = (v) => (v > 0 ? "pos" : v < 0 ? "neg" : "zero");
+const itemKey = (origin, purchaseId, memberId) => `${origin}:${purchaseId}:${memberId}`;
+const OPEN = ["aberto", "pago"];
+const STATUS_LABEL = { aberto: "por pagar", pago: "pago, por confirmar", confirmado: "confirmado", cancelado: "cancelado" };
 
 /* A minha situação numa compra.
    - fui eu que paguei: quanto falta receber e quanto está «por confirmar»
@@ -43,7 +47,8 @@ function myStatus(pu, me) {
   return { role: "debtor", share, settled, claimed, done: settled };
 }
 
-export default function MinhasContasTab({ members, events, eventPurchases, myMember, onOpenEvent, onOpenVacation }) {
+export default function MinhasContasTab({ members, events, eventPurchases, myMember, isAdmin, showToast, onChanged,
+  receipts = [], receiptItems = [], archiveReady, receiptsReady, onOpenEvent, onOpenVacation }) {
   const [vd, setVd] = useState(null);          // {vacations, purchases} das férias
   const [vacErr, setVacErr] = useState(false);
   const [q, setQ] = useState("");
@@ -51,12 +56,17 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [hideDone, setHideDone] = useState(true);
+  const [showArchived, setShowArchived] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [pair, setPair] = useState(null);      // id do membro aberto em detalhe
   const [detail, setDetail] = useState(null);  // key da compra aberta em detalhe
+  const [receiptOpen, setReceiptOpen] = useState(null); // id do recibo aberto
+  const [newReceipt, setNewReceipt] = useState(null);   // id da pessoa para quem se está a criar um recibo
+  const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    feriasApi.loadAccounts().then(setVd).catch((e) => { console.error(e); setVacErr(true); setVd({ vacations: [], purchases: [] }); });
-  }, []);
+  const loadVac = () => feriasApi.loadAccounts().then(setVd)
+    .catch((e) => { console.error(e); setVacErr(true); setVd((d) => d || { vacations: [], purchases: [] }); });
+  useEffect(() => { loadVac(); }, []);
 
   const me = myMember?.id || null;
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
@@ -79,6 +89,28 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
       .map((pu) => ({ ...pu, st: myStatus(pu, me) }))
       .sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.description.localeCompare(b.description));
   }, [me, vd, eventPurchases, events]);
+  const byKey = useMemo(() => new Map(mine.map((pu) => [pu.key, pu])), [mine]);
+
+  /* recibos: os meus (a pagar ou a receber) e em que recibo está cada linha */
+  const myReceipts = useMemo(
+    () => (me ? receipts.filter((r) => r.fromId === me || r.toId === me)
+      .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "")) : []),
+    [receipts, me]
+  );
+  const itemsOf = (rid) => receiptItems.filter((it) => it.receiptId === rid);
+  const receiptOfLine = useMemo(() => {
+    const byId = new Map(receipts.filter((r) => r.status !== "cancelado").map((r) => [r.id, r]));
+    const map = new Map();
+    receiptItems.forEach((it) => {
+      const r = byId.get(it.receiptId);
+      if (!r) return;
+      const k = itemKey(it.origin, it.purchaseId, it.memberId);
+      /* uma linha pode ter recibos antigos confirmados e um em aberto — mostra o mais recente */
+      if (!map.has(k) || (map.get(k).createdAt || "") < (r.createdAt || "")) map.set(k, r);
+    });
+    return map;
+  }, [receipts, receiptItems]);
+  const inOpenReceipt = (pu, memberId) => OPEN.includes(receiptOfLine.get(itemKey(pu.src, pu.id, memberId))?.status);
 
   /* origens onde tenho contas, para o filtro */
   const origins = useMemo(() => {
@@ -103,10 +135,16 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
       return true;
     });
   }, [mine, q, origin, dateFrom, dateTo]);
-  const listed = hideDone ? scoped.filter((pu) => !pu.st.done) : scoped;
+  /* arquivadas e saldadas só saem da lista — nos saldos valem 0 de qualquer forma */
+  const listed = scoped.filter((pu) => (showArchived || !pu.archived) && (!hideDone || !pu.st.done || (showArchived && pu.archived)));
+  const archivedCount = scoped.filter((pu) => pu.archived).length;
+  const canArchive = (pu) => !!archiveReady && !pu.archived && isFullySettled(pu) && (isAdmin || pu.payerId === me);
+  const toArchive = scoped.filter((pu) => canArchive(pu) && pu.payerId === me);
 
   /* saldo com cada pessoa (dívidas dos dois sentidos abatidas) */
   const ledger = useMemo(() => buildLedger(scoped), [scoped]);
+  /* os recibos usam sempre TODAS as contas entre os dois, ignorando os filtros */
+  const fullLedger = useMemo(() => buildLedger(mine), [mine]);
   const rows = useMemo(() => {
     if (!me) return [];
     const ids = new Set();
@@ -126,9 +164,50 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
   const toPay = round2(rows.reduce((acc, r) => acc + Math.max(0, -r.balance), 0));
   const pendingTotal = round2(rows.reduce((acc, r) => acc + r.pending, 0));
 
+  /* o que entraria num recibo meu para `otherId`: o que lhe devo + o que me deve (a abater),
+     sem linhas já presas noutro recibo em aberto */
+  const receiptDraft = (otherId) => {
+    const lines = (cell, debtor) => cell.items
+      .filter(({ pu }) => !inOpenReceipt(pu, debtor))
+      .map(({ pu, amount }) => ({ pu, amount, origin: pu.src, purchaseId: pu.id, memberId: debtor }));
+    const pay = lines(ledgerCell(fullLedger.owe, me, otherId), me);
+    const offset = lines(ledgerCell(fullLedger.owe, otherId, me), otherId);
+    const total = round2(pay.reduce((a, x) => a + x.amount, 0) - offset.reduce((a, x) => a + x.amount, 0));
+    const open = myReceipts.find((r) => r.fromId === me && r.toId === otherId && OPEN.includes(r.status)) || null;
+    return { pay, offset, total, open };
+  };
+
+  async function run(action, okMsg) {
+    setBusy(true);
+    try {
+      const out = await action();
+      await Promise.all([onChanged?.(), loadVac()]);
+      if (okMsg) showToast?.(typeof okMsg === "function" ? okMsg(out) : okMsg);
+      return out;
+    } catch (e) {
+      console.error(e);
+      if (isMissingRpc(e)) showToast?.("Esta função ainda não está ativa no Supabase (falta correr a migração das contas).");
+      else showToast?.(e?.message ? `Não foi possível: ${e.message}` : "Não foi possível concluir.");
+      return null;
+    } finally { setBusy(false); }
+  }
+
+  const createReceipt = async (otherId) => {
+    const d = receiptDraft(otherId);
+    const rid = await run(() => contasApi.createReceipt(otherId, [...d.pay, ...d.offset]), (id) => `Recibo ${id} criado.`);
+    if (rid) { setNewReceipt(null); setPair(null); setReceiptOpen(rid); }
+  };
+  const archiveMany = async (list, value) => {
+    await run(async () => { for (const pu of list) await contasApi.setArchived(pu.src, pu.id, value); },
+      value ? (list.length > 1 ? `${list.length} contas arquivadas.` : "Conta arquivada.") : "Conta desarquivada.");
+  };
+
   const filtersOn = q || origin !== "all" || dateFrom || dateTo;
   const clearFilters = () => { setQ(""); setOrigin("all"); setDateFrom(""); setDateTo(""); };
   const openDetail = mine.find((pu) => pu.key === detail) || null;
+  const activeReceipts = myReceipts.filter((r) => OPEN.includes(r.status));
+  const pastReceipts = myReceipts.filter((r) => !OPEN.includes(r.status));
+  const openReceipt = myReceipts.find((r) => r.id === receiptOpen) || null;
 
   return (
     <section>
@@ -142,6 +221,14 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
       ) : (
         <>
           {vacErr && <p className="hint">Não foi possível carregar as contas das férias — por agora só aparecem as dos eventos.</p>}
+
+          {activeReceipts.length > 0 && (
+            <div className="mc-receipts">
+              {activeReceipts.map((r) => (
+                <ReceiptCard key={r.id} r={r} me={me} nm={nm} onOpen={() => setReceiptOpen(r.id)} />
+              ))}
+            </div>
+          )}
 
           <div className="mc-kpis">
             <div className="mc-kpi pos"><span>A receber</span><b>{eur(toReceive)}</b></div>
@@ -181,7 +268,8 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
             <>
               <p className="hint" style={{ marginTop: 0 }}>
                 Já com as dívidas dos dois sentidos abatidas. Verde = têm de te pagar, vermelho = tens de pagar.
-                Os pagamentos «por confirmar» não entram nas somas. Clica numa linha para veres as contas.
+                Os pagamentos «por confirmar» não entram nas somas. Clica numa linha para veres as contas
+                {toPay > 0 ? " — e, se deves, para pagar tudo de uma vez com um recibo" : ""}.
               </p>
               <div className="mc-table-wrap">
                 <table className="mc-table">
@@ -208,11 +296,27 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
 
           <div className="mc-list-head">
             <h3 className="mc-h">As tuas contas ({listed.length})</h3>
-            <label className="mc-check">
-              <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} />
-              Ocultar saldadas
-            </label>
+            <div className="mc-list-opts">
+              <label className="mc-check">
+                <input type="checkbox" checked={hideDone} onChange={(e) => setHideDone(e.target.checked)} />
+                Ocultar saldadas
+              </label>
+              {archivedCount > 0 && (
+                <label className="mc-check">
+                  <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+                  Ver arquivadas ({archivedCount})
+                </label>
+              )}
+            </div>
           </div>
+          {toArchive.length > 0 && (
+            <p className="hint mc-archive-hint">
+              Tens {toArchive.length} conta{toArchive.length === 1 ? "" : "s"} que pagaste já saldada{toArchive.length === 1 ? "" : "s"}.{" "}
+              <button className="btn ghost small" disabled={busy} onClick={() => {
+                if (window.confirm(`Arquivar ${toArchive.length} conta${toArchive.length === 1 ? "" : "s"} saldada${toArchive.length === 1 ? "" : "s"}? Não muda nenhum valor — continuam visíveis em «Ver arquivadas».`)) archiveMany(toArchive, true);
+              }}>Arquivar {toArchive.length === 1 ? "essa" : `as ${toArchive.length}`}</button>
+            </p>
+          )}
           {listed.length === 0 ? (
             <p className="empty">
               {mine.length === 0 ? "Ainda não entras em nenhuma conta."
@@ -221,32 +325,72 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
             </p>
           ) : (
             <div className="mc-list">
-              {listed.map((pu) => (
-                <button key={pu.key} className={`mc-row ${pu.st.done ? "done" : ""}`} onClick={() => setDetail(pu.key)}>
-                  <div className="mc-row-main">
-                    <strong>{pu.description}</strong>
-                    <span className="mc-origin">
-                      <span className={`mc-kind ${pu.src}`}>{pu.src === "event" ? "Evento" : "Férias"}</span>
-                      {pu.srcName}{pu.date ? ` · ${fmtDate(pu.date)}` : ""}
-                    </span>
-                  </div>
-                  <div className="mc-row-side">
-                    <StatusLine st={pu.st} payerName={nm(pu.payerId)} />
-                    <span className="mc-total">total {eur(pu.total)}</span>
-                  </div>
-                </button>
-              ))}
+              {listed.map((pu) => {
+                /* a minha parte desta conta está (ou esteve) num recibo? */
+                const rec = pu.st.role === "debtor" ? receiptOfLine.get(itemKey(pu.src, pu.id, me)) : null;
+                return (
+                  <button key={pu.key} className={`mc-row ${pu.st.done ? "done" : ""} ${pu.archived ? "archived" : ""}`} onClick={() => setDetail(pu.key)}>
+                    <div className="mc-row-main">
+                      <strong>{pu.description}</strong>
+                      <span className="mc-origin">
+                        <span className={`mc-kind ${pu.src}`}>{pu.src === "event" ? "Evento" : "Férias"}</span>
+                        {pu.srcName}{pu.date ? ` · ${fmtDate(pu.date)}` : ""}
+                        {pu.archived && <span className="mc-tag">arquivada</span>}
+                        {rec && <span className="mc-tag">recibo {rec.id}</span>}
+                      </span>
+                    </div>
+                    <div className="mc-row-side">
+                      <StatusLine st={pu.st} payerName={nm(pu.payerId)} />
+                      <span className="mc-total">total {eur(pu.total)}</span>
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {pastReceipts.length > 0 && (
+            <div className="mc-history">
+              <button className="btn ghost small" onClick={() => setShowHistory((v) => !v)}>
+                {showHistory ? "Esconder" : "Ver"} recibos anteriores ({pastReceipts.length})
+              </button>
+              {showHistory && (
+                <div className="mc-receipts" style={{ marginTop: 10 }}>
+                  {pastReceipts.map((r) => (
+                    <ReceiptCard key={r.id} r={r} me={me} nm={nm} onOpen={() => setReceiptOpen(r.id)} />
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </>
       )}
 
       {pair && (
-        <PairModal ledger={ledger} me={me} otherId={pair} nm={nm}
+        <PairModal ledger={ledger} me={me} otherId={pair} nm={nm} filtersOn={!!filtersOn} receiptsReady={!!receiptsReady}
+          draft={receiptDraft(pair)}
+          onNewReceipt={() => { setNewReceipt(pair); setPair(null); }}
+          onOpenReceipt={(id) => { setPair(null); setReceiptOpen(id); }}
           onOpen={(key) => { setPair(null); setDetail(key); }} onClose={() => setPair(null)} />
       )}
+      {newReceipt && (
+        <NewReceiptModal draft={receiptDraft(newReceipt)} otherName={nm(newReceipt)} busy={busy}
+          onCreate={() => createReceipt(newReceipt)} onClose={() => setNewReceipt(null)} />
+      )}
+      {openReceipt && (
+        <ReceiptModal r={openReceipt} items={itemsOf(openReceipt.id)} me={me} nm={nm} byKey={byKey} busy={busy}
+          onPay={() => run(() => contasApi.payReceipt(openReceipt.id), "Marcado como pago — falta a outra pessoa confirmar.")}
+          onConfirm={() => run(() => contasApi.confirmReceipt(openReceipt.id), "Recibo confirmado — contas saldadas.")}
+          onReopen={() => run(() => contasApi.reopenReceipt(openReceipt.id), "Recibo reaberto.")}
+          onCancel={() => run(() => contasApi.cancelReceipt(openReceipt.id), "Recibo cancelado.")}
+          onOpenAccount={(key) => { setReceiptOpen(null); setDetail(key); }}
+          onClose={() => setReceiptOpen(null)} />
+      )}
       {openDetail && (
-        <AccountModal pu={openDetail} me={me} nm={nm}
+        <AccountModal pu={openDetail} me={me} nm={nm} receiptOfLine={receiptOfLine} busy={busy}
+          canArchive={canArchive(openDetail)} canUnarchive={!!archiveReady && openDetail.archived && (isAdmin || openDetail.payerId === me)}
+          onArchive={(value) => archiveMany([openDetail], value)}
+          onOpenReceipt={(id) => { setDetail(null); setReceiptOpen(id); }}
           onGo={() => {
             setDetail(null);
             if (openDetail.src === "event") onOpenEvent(openDetail.srcId, openDetail.id);
@@ -288,8 +432,34 @@ function McModal({ title, onClose, children }) {
   );
 }
 
+/* ---------- Cartão de recibo (lista no topo e histórico) ---------- */
+function ReceiptCard({ r, me, nm, onOpen }) {
+  const iPay = r.fromId === me;
+  const other = nm(iPay ? r.toId : r.fromId);
+  let text, cls = "";
+  if (r.status === "aberto") {
+    text = iPay ? <>Tens de pagar <b>{eur(r.total)}</b> a <b>{other}</b> — usa <b>{r.id}</b> no descritivo e depois marca como pago</>
+      : <><b>{other}</b> criou um recibo de <b>{eur(r.total)}</b> para ti — ainda não pagou</>;
+    cls = iPay ? "todo" : "";
+  } else if (r.status === "pago") {
+    text = iPay ? <>Pagaste <b>{eur(r.total)}</b> a <b>{other}</b> — à espera que confirme</>
+      : <><b>{other}</b> diz que te pagou <b>{eur(r.total)}</b> — confirma se recebeste</>;
+    cls = iPay ? "wait" : "todo";
+  } else {
+    text = <>{iPay ? `Para ${other}` : `De ${other}`} · <b>{eur(r.total)}</b> · {STATUS_LABEL[r.status]}</>;
+    cls = "past";
+  }
+  return (
+    <button className={`mc-receipt ${cls}`} onClick={onOpen}>
+      <span className="mc-receipt-id">{r.id}</span>
+      <span className="mc-receipt-text">{text}</span>
+      <span className="mc-receipt-go">ver →</span>
+    </button>
+  );
+}
+
 /* ---------- Eu e outra pessoa: as contas dos dois sentidos ---------- */
-function PairModal({ ledger, me, otherId, nm, onOpen, onClose }) {
+function PairModal({ ledger, me, otherId, nm, filtersOn, receiptsReady, draft, onNewReceipt, onOpenReceipt, onOpen, onClose }) {
   const iOwe = ledgerCell(ledger.owe, me, otherId);
   const owesMe = ledgerCell(ledger.owe, otherId, me);
   const pendOut = ledgerCell(ledger.pend, me, otherId);
@@ -317,13 +487,27 @@ function PairModal({ ledger, me, otherId, nm, onOpen, onClose }) {
         {net > 0 ? <><b>{name}</b> deve-te <b className="mc-pos">{eur(net)}</b></>
           : net < 0 ? <>Deves <b className="mc-neg">{eur(-net)}</b> a <b>{name}</b></>
           : <>Estão quites — as dívidas dos dois lados anulam-se.</>}
+        {filtersOn && <><br /><span className="mc-muted">(só as contas que passam nos filtros)</span></>}
       </p>
+
+      {!receiptsReady ? null : draft.open ? (
+        <div className="mc-receipt-cta">
+          <span>Já tens o recibo <b>{draft.open.id}</b> para {name} ({STATUS_LABEL[draft.open.status]}).</span>
+          <button className="btn ghost small" onClick={() => onOpenReceipt(draft.open.id)}>Ver recibo</button>
+        </div>
+      ) : draft.total > 0 && draft.pay.length > 0 ? (
+        <div className="mc-receipt-cta">
+          <span>Paga tudo o que deves a {name} de uma vez: <b>{eur(draft.total)}</b>{draft.offset.length > 0 ? " (já com o que te deve abatido)" : ""}.</span>
+          <button className="btn ember small" onClick={onNewReceipt}>Criar recibo</button>
+        </div>
+      ) : null}
+
       {block(`Deves a ${name}`, iOwe)}
       {block(`${name} deve-te`, owesMe)}
       {(pendOut.items.length > 0 || pendIn.items.length > 0) && (
         <>
           <h4>Já pagos, à espera de confirmação</h4>
-          <p className="hint" style={{ marginTop: 0 }}>Não entram nas somas acima. Quem recebeu confirma no evento ou nas férias de origem.</p>
+          <p className="hint" style={{ marginTop: 0 }}>Não entram nas somas acima. Quem recebeu confirma no recibo, no evento ou nas férias de origem.</p>
           {block(`Pagaste a ${name}`, pendOut)}
           {block(`${name} pagou-te`, pendIn)}
         </>
@@ -332,18 +516,125 @@ function PairModal({ ledger, me, otherId, nm, onOpen, onClose }) {
   );
 }
 
-/* ---------- Detalhe de uma conta (só leitura) ---------- */
-function AccountModal({ pu, me, nm, onGo, onClose }) {
+/* ---------- Pré-visualizar e criar um recibo ---------- */
+function ReceiptLines({ title, lines, sign }) {
+  if (!lines.length) return null;
+  return (
+    <>
+      <h4>{title}</h4>
+      <div className="mini-list">
+        {lines.map((l, i) => (
+          <div key={i} className="mini-item static">
+            <span>{l.pu?.description || "Compra"}<span className="mini-date"> · {l.pu ? `${l.pu.src === "event" ? "evento" : "férias"} ${l.pu.srcName}` : ""}</span></span>
+            <b className="mc-amount">{sign}{eur(l.amount)}</b>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function NewReceiptModal({ draft, otherName, busy, onCreate, onClose }) {
+  return (
+    <McModal title={`Novo recibo para ${otherName}`} onClose={onClose}>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Junta num só pagamento tudo o que deves a {otherName} e ainda não pagaste{draft.offset.length ? `, já abatido do que ${otherName} te deve` : ""}.
+        Depois de criar, recebes um ID curto para pôr no descritivo do MB Way / Revolut.
+      </p>
+      <ReceiptLines title="O que pagas" lines={draft.pay} sign="" />
+      <ReceiptLines title={`A abater (${otherName} deve-te)`} lines={draft.offset} sign="−" />
+      <p className="net-summary">Total a pagar: <b className="mc-neg">{eur(draft.total)}</b></p>
+      <div className="actions">
+        <button className="btn ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn ember" disabled={busy || draft.total <= 0} onClick={onCreate}>Criar recibo</button>
+      </div>
+    </McModal>
+  );
+}
+
+/* ---------- Detalhe de um recibo ---------- */
+function ReceiptModal({ r, items, me, nm, byKey, busy, onPay, onConfirm, onReopen, onCancel, onOpenAccount, onClose }) {
+  const iPay = r.fromId === me;
+  const other = nm(iPay ? r.toId : r.fromId);
+  const lineOf = (it) => ({ ...it, pu: byKey.get(`${it.origin}:${it.purchaseId}`) });
+  const pay = items.filter((it) => it.memberId === r.fromId).map(lineOf);
+  const offset = items.filter((it) => it.memberId === r.toId).map(lineOf);
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    try { navigator.clipboard.writeText(r.id).then(() => { setCopied(true); setTimeout(() => setCopied(false), 1500); }); } catch { /* sem clipboard */ }
+  };
+  const lines = (title, list, sign) => !list.length ? null : (
+    <>
+      <h4>{title}</h4>
+      <div className="mini-list">
+        {list.map((l, i) => (
+          <button key={i} className="mini-item" disabled={!l.pu} onClick={() => l.pu && onOpenAccount(l.pu.key)}>
+            <span>{l.pu?.description || "Compra (já não existe)"}<span className="mini-date">{l.pu ? ` · ${l.pu.src === "event" ? "evento" : "férias"} ${l.pu.srcName}` : ""}</span></span>
+            <b className="mc-amount">{sign}{eur(l.amount)}</b>
+          </button>
+        ))}
+      </div>
+    </>
+  );
+
+  return (
+    <McModal title={`Recibo ${r.id}`} onClose={onClose}>
+      <div className="mc-detail-grid" style={{ marginTop: 0 }}>
+        <div><span>{iPay ? "Pagas a" : "Recebes de"}</span><b>{other}</b></div>
+        <div><span>Total</span><b>{eur(r.total)}</b></div>
+        <div><span>Estado</span><b className={`mc-rstatus ${r.status}`}>{STATUS_LABEL[r.status]}</b></div>
+        <div><span>Criado</span><b>{fmtDate(r.createdAt)}</b></div>
+      </div>
+
+      {iPay && r.status === "aberto" && (
+        <div className="mc-receipt-id-box">
+          <span>Descritivo da transferência (MB Way / Revolut):</span>
+          <b>{r.id}</b>
+          <button className="btn ghost small" onClick={copy}>{copied ? "Copiado ✓" : "Copiar"}</button>
+        </div>
+      )}
+
+      {lines(iPay ? "O que pagas" : `O que ${other} te paga`, pay, "")}
+      {lines(iPay ? `A abater (${other} deve-te)` : `A abater (o que deves a ${other})`, offset, "−")}
+
+      <p className="hint">
+        {r.status === "aberto" && (iPay ? "Depois de transferires, marca como pago: todas estas contas passam a «por confirmar» de uma vez." : `Quando ${other} pagar e marcar o recibo como pago, recebes aqui o pedido para confirmar.`)}
+        {r.status === "pago" && (iPay ? `${other} vai confirmar que recebeu — aí as contas ficam saldadas.` : "Confirma só depois de veres o dinheiro na conta. Todas estas contas ficam saldadas de uma vez.")}
+        {r.status === "confirmado" && `Confirmado a ${fmtDate(r.confirmedAt)} — estas contas foram pagas em conjunto neste recibo.`}
+        {r.status === "cancelado" && "Recibo cancelado — as contas voltaram a ficar por pagar avulso."}
+      </p>
+
+      <div className="actions">
+        {iPay && r.status === "aberto" && <>
+          <button className="btn ghost" disabled={busy} onClick={() => { if (window.confirm("Cancelar este recibo? As contas voltam a ficar por pagar.")) onCancel(); }}>Cancelar recibo</button>
+          <button className="btn ember" disabled={busy} onClick={() => { if (window.confirm(`Confirmas que já transferiste ${eur(r.total)} a ${other}?`)) onPay(); }}>Já paguei</button>
+        </>}
+        {iPay && r.status === "pago" && (
+          <button className="btn ghost" disabled={busy} onClick={onReopen}>Afinal ainda não paguei</button>
+        )}
+        {!iPay && r.status === "pago" && <>
+          <button className="btn ghost" disabled={busy} onClick={() => { if (window.confirm("Marcar como não recebido? O recibo volta a ficar por pagar.")) onReopen(); }}>Não recebi</button>
+          <button className="btn ember" disabled={busy} onClick={() => { if (window.confirm(`Confirmas que recebeste ${eur(r.total)} de ${other}? As contas ficam saldadas.`)) onConfirm(); }}>Confirmar que recebi</button>
+        </>}
+      </div>
+    </McModal>
+  );
+}
+
+/* ---------- Detalhe de uma conta ---------- */
+function AccountModal({ pu, me, nm, receiptOfLine, busy, canArchive, canUnarchive, onArchive, onOpenReceipt, onGo, onClose }) {
   const parts = pu.participants || [];
   const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
   const settledSum = Math.min(pu.total, round2(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0)));
   const pct = pu.total > 0 ? Math.min(100, Math.round((settledSum / pu.total) * 100)) : 0;
   const label = (id) => (id === me ? "Tu" : nm(id));
+  const recs = parts.map((mid) => ({ mid, r: receiptOfLine.get(itemKey(pu.src, pu.id, mid)) })).filter((x) => x.r);
   return (
     <McModal title={pu.description} onClose={onClose}>
       <p className="mc-origin" style={{ marginTop: 0 }}>
         <span className={`mc-kind ${pu.src}`}>{pu.src === "event" ? "Evento" : "Férias"}</span>
         {pu.srcName}{pu.date ? ` · ${fmtDate(pu.date)}` : ""}
+        {pu.archived && <span className="mc-tag">arquivada</span>}
       </p>
       <div className="mc-detail-grid">
         <div><span>Total</span><b>{eur(pu.total)}</b></div>
@@ -381,8 +672,24 @@ function AccountModal({ pu, me, nm, onGo, onClose }) {
         })}
       </div>
 
-      <p className="hint">Para marcar «já paguei», confirmar ou editar, abre a conta no sítio de origem.</p>
+      {recs.length > 0 && (
+        <>
+          <h4>Pago em recibo</h4>
+          <div className="mini-list">
+            {recs.map(({ mid, r }) => (
+              <button key={mid} className="mini-item" onClick={() => onOpenReceipt(r.id)}>
+                <span>{label(mid)}<span className="mini-date"> · recibo {r.id}</span></span>
+                <b className="mc-amount">{STATUS_LABEL[r.status]}</b>
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+
+      <p className="hint">Para marcar «já paguei», confirmar uma conta avulsa ou editar, abre a conta no sítio de origem.</p>
       <div className="actions">
+        {canArchive && <button className="btn ghost" disabled={busy} onClick={() => onArchive(true)} title="Esconde a conta da lista — não muda nenhum valor">Arquivar</button>}
+        {canUnarchive && <button className="btn ghost" disabled={busy} onClick={() => onArchive(false)}>Desarquivar</button>}
         <button className="btn ember" onClick={onGo}>{pu.src === "event" ? "Abrir no evento" : "Abrir nas férias"}</button>
       </div>
     </McModal>
@@ -408,6 +715,7 @@ function ContasStyle() {
       .mc-filters .mc-date input { width: auto; margin: 0; }
 
       .mc-h { margin: 6px 0 10px; font-size: 15px; }
+      .mc-muted { color: var(--muted); font-size: 12.5px; }
       .mc-table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin-bottom: 20px;
         border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
       .mc-table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
@@ -425,14 +733,16 @@ function ContasStyle() {
         border: 1px dashed var(--gold); color: var(--gold); white-space: nowrap; }
 
       .mc-list-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+      .mc-list-opts { display: flex; gap: 14px; flex-wrap: wrap; }
       .mc-list-head .mc-check { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); margin: 0; cursor: pointer; }
       .mc-check input { width: auto; margin: 0; }
+      .mc-archive-hint { margin: 0 0 10px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
       .mc-list { display: flex; flex-direction: column; gap: 8px; }
       .mc-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; width: 100%;
         background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
         color: var(--text); font: inherit; text-align: left; cursor: pointer; transition: border-color .15s; }
       .mc-row:hover { border-color: var(--ember); }
-      .mc-row.done { opacity: .6; }
+      .mc-row.done, .mc-row.archived { opacity: .6; }
       .mc-row-main { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
       .mc-row-main strong { overflow-wrap: anywhere; }
       .mc-row-side { display: flex; flex-direction: column; align-items: flex-end; gap: 3px; text-align: right; flex-shrink: 0; }
@@ -440,6 +750,7 @@ function ContasStyle() {
       .mc-kind { font-size: 11px; padding: 1px 8px; border-radius: 999px; background: rgba(255,255,255,.07); color: var(--text); }
       .mc-kind.vacation { background: rgba(245,184,65,.14); color: var(--gold); }
       .mc-kind.event { background: rgba(255,122,61,.14); color: var(--ember); }
+      .mc-tag { font-size: 11px; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
       .mc-total { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
       .mc-st { font-size: 13px; }
       .mc-st.pos { color: #7BD389; }
@@ -447,6 +758,26 @@ function ContasStyle() {
       .mc-st.done { color: var(--muted); }
       .mc-claim { color: var(--gold); }
       .mc-amount { white-space: nowrap; margin-left: 10px; }
+
+      .mc-receipts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+      .mc-receipt { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; font: inherit; color: var(--text);
+        background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 11px 14px; cursor: pointer; }
+      .mc-receipt:hover { border-color: var(--ember); }
+      .mc-receipt.todo { border-color: var(--ember); background: linear-gradient(135deg, rgba(255,122,61,.12), rgba(245,184,65,.05)); }
+      .mc-receipt.wait { border-style: dashed; border-color: var(--gold); }
+      .mc-receipt.past { opacity: .7; }
+      .mc-receipt-id { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 700; color: var(--gold); white-space: nowrap; }
+      .mc-receipt-text { flex: 1; font-size: 13.5px; min-width: 0; }
+      .mc-receipt-go { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
+      .mc-receipt-cta { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
+        border: 1px solid var(--ember); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: rgba(255,122,61,.07); font-size: 13.5px; }
+      .mc-receipt-id-box { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; padding: 10px 12px;
+        border: 1px dashed var(--gold); border-radius: 10px; font-size: 13px; color: var(--muted); }
+      .mc-receipt-id-box b { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 18px; color: var(--gold); letter-spacing: .06em; }
+      .mc-rstatus.pago { color: var(--gold); }
+      .mc-rstatus.confirmado { color: #7BD389; }
+      .mc-rstatus.cancelado { color: var(--muted); }
+      .mc-history { margin-top: 18px; }
 
       .mc-detail-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin: 12px 0; }
       .mc-detail-grid div { display: flex; flex-direction: column; gap: 3px; background: var(--surface2); border-radius: 8px; padding: 9px 11px; }
@@ -466,6 +797,8 @@ function ContasStyle() {
         .mc-filters .mc-date { flex: 1 1 40%; min-width: 0; }
         .mc-filters .mc-date input { flex: 1; min-width: 0; }
         .mc-pend-tag { margin-left: 0; margin-top: 4px; display: block; width: fit-content; }
+        .mc-receipt { flex-wrap: wrap; gap: 6px 10px; }
+        .mc-receipt-text { flex-basis: 100%; order: 3; }
       }
     `}</style>
   );

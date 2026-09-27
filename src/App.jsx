@@ -6,11 +6,11 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
      (email+password ou Google) para gerir
    - Dados em tabelas Supabase com RLS (ver src/api.js)
    ============================================================ */
-import { api, supabase, availabilityApi, fetchBackup, BACKUP_TABLES } from "./api.js";
+import { api, supabase, availabilityApi, fetchBackup, BACKUP_TABLES, contasApi, isMissingRpc } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
 import MinhasContasTab from "./Contas.jsx";
-import { shareOf } from "./ledger.js";
+import { shareOf, isFullySettled } from "./ledger.js";
 import MediaTab from "./Media.jsx";
 import DisponibilidadeTab, { missingDays as availMissingDays, monthsOf as availMonthsOf, weeksWindow as availWeeksWindow } from "./Disponibilidade.jsx";
 import { CalendarView, EventsMap, EventLocationManager, EventSearch, needsLocation, extractLatLng } from "./EventsExtra.jsx";
@@ -340,6 +340,12 @@ export default function App() {
   }, [sortedEventsAsc, filterYear, filterMembers, eventSort]);
 
   /* dívidas líquidas por membro (públicas), com idade — para o badge do scoreboard */
+  /* recibos marcados como pagos a mim, à espera da minha confirmação */
+  const receiptsToConfirm = useMemo(
+    () => (myMember ? (data?.payReceipts || []).filter((r) => r.toId === myMember.id && r.status === "pago") : []),
+    [data, myMember]
+  );
+
   const debtMap = useMemo(() => {
     if (!data) return {};
     const map = {};
@@ -667,12 +673,30 @@ export default function App() {
   }
 
   async function toggleSettled(pu, memberId) {
-    const next = { ...pu, settled: { ...pu.settled, [memberId]: !pu.settled[memberId] } };
+    const value = !pu.settled?.[memberId];
+    const next = { ...pu, settled: { ...pu.settled, [memberId]: value } };
     try {
-      await api.savePurchase(next);
-      setData({ ...data, purchases: data.purchases.map((p) => (p.id === pu.id ? next : p)) });
-    } catch { showToast("Não foi possível atualizar."); }
+      /* RPC que só mexe em settled[membro] — não pisa alterações feitas entretanto por outros */
+      try { await contasApi.setSettled("event", pu.id, memberId, value); }
+      catch (e) { if (isMissingRpc(e)) await api.savePurchase(next); else throw e; }
+      setData((d) => ({ ...d, purchases: d.purchases.map((p) => (p.id === pu.id ? { ...p, settled: next.settled } : p)) }));
+    } catch (e) { console.error(e); showToast("Não foi possível atualizar."); }
   }
+
+  /* arquivar / desarquivar uma compra saldada (não mexe em valores) */
+  async function setPurchaseArchived(pu, value) {
+    try {
+      await contasApi.setArchived("event", pu.id, value);
+      setData((d) => ({ ...d, purchases: d.purchases.map((p) => (p.id === pu.id ? { ...p, archived: value } : p)) }));
+      showToast(value ? "Conta arquivada." : "Conta desarquivada.");
+    } catch (e) {
+      console.error(e);
+      showToast(isMissingRpc(e) ? "Falta correr setup-contas-arquivo.sql no Supabase." : "Não foi possível arquivar.");
+    }
+  }
+
+  /* recarrega tudo (depois de ações que mexem em várias compras de uma vez, como os recibos) */
+  const reloadData = () => api.loadAll().then(setData).catch((e) => console.error(e));
 
   async function claimPayment(pu, memberId, value) {
     const next = { ...pu, claimed: { ...(pu.claimed || {}), [memberId]: value } };
@@ -786,6 +810,7 @@ export default function App() {
                 : label}
               {id === "admin" && pendingProfiles.length > 0 && <span className="badge">{pendingProfiles.length}</span>}
               {id === "disponibilidade" && myMember && availMissingCount > 0 && <span className="badge">{availMissingCount}</span>}
+              {id === "contas" && receiptsToConfirm.length > 0 && <span className="badge" title="Recibos por confirmar">{receiptsToConfirm.length}</span>}
             </button>
           ))}
         </nav>
@@ -799,6 +824,8 @@ export default function App() {
               onMember={(id) => setModal({ type: "memberDetail", id })}
               onConfirm={toggleConfirmation}
               onConfirmPayment={(pu, mid) => toggleSettled(pu, mid)}
+              receiptsToConfirm={receiptsToConfirm} receiptItems={data.receiptItems || []}
+              onGoContas={() => setTab("contas")}
               wishes={data.wishes || []}
               onWish={(mid) => setModal({ type: "birthdayWish", memberId: mid })}
               onEmailWish={emailBirthdayWish}
@@ -817,7 +844,9 @@ export default function App() {
 
           {tab === "contas" && (
             <MinhasContasTab members={data.members} events={data.events} eventPurchases={data.purchases}
-              myMember={myMember}
+              myMember={myMember} isAdmin={isAdmin} showToast={showToast} onChanged={reloadData}
+              receipts={data.payReceipts || []} receiptItems={data.receiptItems || []}
+              archiveReady={!!data.archiveReady} receiptsReady={!!data.receiptsReady}
               onOpenEvent={(id, purchaseId) => setModal({ type: "eventDetail", id, highlightPurchase: purchaseId })}
               onOpenVacation={(vacationId, purchaseId) => { setFeriasJump({ vacationId, purchaseId }); setTab("ferias"); }} />
           )}
@@ -1081,6 +1110,7 @@ export default function App() {
           onImportPurchases={() => setModal({ type: "importPurchases", eventId: ev.id })}
           onToggleSettled={toggleSettled}
           onClaim={claimPayment}
+          onArchive={data.archiveReady ? setPurchaseArchived : null}
           onClose={() => setModal(null)} />;
       })()}
 
@@ -1221,7 +1251,7 @@ function DebtDetailModal({ pair, direction, myName, onClose }) {
   );
 }
 
-function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, wishes, onWish, onEmailWish, shames, onClearShame, onDebtDetail, availability, onGoAvailability, onGoScoreboard }) {
+function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent, onMember, onConfirm, onConfirmPayment, receiptsToConfirm = [], receiptItems = [], onGoContas, wishes, onWish, onEmailWish, shames, onClearShame, onDebtDetail, availability, onGoAvailability, onGoScoreboard }) {
   const myShames = myMember ? (shames || []).filter((sh) => sh.memberId === myMember.id && !sh.cleared) : [];
   /* disponibilidade: dias por classificar nas próximas 4 semanas (janela alinhada
      à semana, por isso o aviso só "volta" uma vez por semana) */
@@ -1273,11 +1303,16 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
   /* pagamentos que dizem ter-me feito (sou o credor) e faltam confirmar */
   const toConfirm = useMemo(() => {
     if (!myMember) return [];
+    /* as linhas de um recibo pago confirmam-se no recibo (uma vez), não uma a uma */
+    const inReceipt = new Set(receiptItems
+      .filter((it) => it.origin === "event" && receiptsToConfirm.some((r) => r.id === it.receiptId))
+      .map((it) => `${it.purchaseId}:${it.memberId}`));
     const items = [];
     (purchases || []).forEach((pu) => {
       if (pu.payerId !== myMember.id) return;
       (pu.participants || []).forEach((mid) => {
         if (mid === pu.payerId || pu.settled?.[mid] || !pu.claimed?.[mid]) return;
+        if (inReceipt.has(`${pu.id}:${mid}`)) return;
         const ev = events.find((e) => e.id === pu.eventId);
         items.push({
           pu, mid, eventName: ev?.name || "?", desc: pu.description,
@@ -1286,7 +1321,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
       });
     });
     return items;
-  }, [purchases, events, members, myMember]);
+  }, [purchases, events, members, myMember, receiptsToConfirm, receiptItems]);
   const anchor = useMemo(() => {
     let a = -1;
     events.forEach((e, i) => { if (getStatus(e) === "Concluído") a = i; });
@@ -1393,7 +1428,7 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
             <div className="todo-panel2">
               <h4 style={{ marginTop: 0 }}>Contas</h4>
               {!myMember && <p className="hint">Entra com a tua conta de membro para veres as tuas contas.</p>}
-              {myMember && myNet.pay.length === 0 && myNet.receive.length === 0 && toConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
+              {myMember && myNet.pay.length === 0 && myNet.receive.length === 0 && toConfirm.length === 0 && receiptsToConfirm.length === 0 && <p className="hint">Sem contas por saldar.</p>}
               {myMember && myNet.pay.length > 0 && (
                 <div className="debt-grid">
                   {myNet.pay.map((d) => (
@@ -1432,9 +1467,17 @@ function HomeTab({ events, scoreboard, myMember, purchases, members, onOpenEvent
                   )}
                 </>
               )}
-              {myMember && toConfirm.length > 0 && (
+              {myMember && (toConfirm.length > 0 || receiptsToConfirm.length > 0) && (
                 <>
                   <h4>Pagamentos a confirmar</h4>
+                  {receiptsToConfirm.map((r) => (
+                    <div key={r.id} className="todo-item">
+                      <button className="todo-name" onClick={onGoContas}>Recibo {r.id}</button>
+                      <span className="mini-date">várias contas de uma vez</span>
+                      <span className="debt-line"><b>{members.find((m) => m.id === r.fromId)?.name || "?"}</b> diz que te pagou <b>{eur(r.total)}</b></span>
+                      <button className="pill" onClick={onGoContas}>Ver e confirmar</button>
+                    </div>
+                  ))}
                   {toConfirm.map((c) => (
                     <div key={`${c.pu.id}-${c.mid}`} className="todo-item">
                       <button className="todo-name" onClick={() => onOpenEvent(c.pu.eventId)}>{c.eventName}</button>
@@ -1700,8 +1743,11 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, highlightPurchase, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onDiscordDebts, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, highlightPurchase, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onDiscordDebts, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onArchive, onClose }) {
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+  /* se se chega para destacar uma conta arquivada, mostra logo as arquivadas */
+  const [showArchived, setShowArchived] = useState(() => !!(purchases || []).find((pu) => pu.id === highlightPurchase)?.archived);
+  const archivedCount = (purchases || []).filter((pu) => pu.archived).length;
   /* vindo de «As Minhas Contas»: leva a compra ao centro e destaca-a uns segundos */
   const [hl, setHl] = useState(highlightPurchase || null);
   useEffect(() => {
@@ -1803,9 +1849,17 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, highlight
         </>
       )}
 
-      <h4>Contas</h4>
+      <div className="contas-head">
+        <h4>Contas</h4>
+        {archivedCount > 0 && (
+          <label className="archived-toggle">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Ver arquivadas ({archivedCount})
+          </label>
+        )}
+      </div>
       {(!purchases || purchases.length === 0) && <p className="hint">Sem contas.</p>}
-      {(purchases || []).map((pu) => {
+      {(purchases || []).filter((pu) => showArchived || !pu.archived).map((pu) => {
         const parts = pu.participants || [];
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
         const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
@@ -1813,10 +1867,17 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, highlight
         const payer = members.find((m) => m.id === pu.payerId);
         const iAmPayer = !!myMember && pu.payerId === myMember.id;
         return (
-          <div key={pu.id} id={`pu-${pu.id}`} className={`purchase ${hl === pu.id ? "pu-hl" : ""}`}>
+          <div key={pu.id} id={`pu-${pu.id}`} className={`purchase ${hl === pu.id ? "pu-hl" : ""} ${pu.archived ? "archived" : ""}`}>
             <div className="purchase-head">
               <strong>{pu.description}</strong>
+              {pu.archived && <span className="archived-tag">arquivada</span>}
               <span className="purchase-total">{eur(pu.total)}</span>
+              {onArchive && (isAdmin || iAmPayer) && (pu.archived || isFullySettled(pu)) && (
+                <button className="btn ghost small" title={pu.archived ? "Voltar a mostrar esta conta" : "Esconder esta conta saldada (não mexe em valores)"}
+                  onClick={() => onArchive(pu, !pu.archived)}>
+                  {pu.archived ? "Desarquivar" : "Arquivar"}
+                </button>
+              )}
               {isAdmin && <button className="iconbtn" title="Cobrar no Discord (menciona quem tem esta compra por saldar)" onClick={() => onDiscordPayment(pu)}>💸</button>}
               {(isAdmin || iAmPayer) && <button className="iconbtn" title="Editar compra" onClick={() => onEditPurchase(pu.id)}>{Icon.gear({})}</button>}
             </div>
@@ -2963,6 +3024,11 @@ function Style() {
 
       .badge { background:var(--ember); color:#1A0F08; border-radius:10px; font-size:11px; font-weight:700; padding:1px 7px; margin-left:8px; }
       .purchase { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px; }
+      .purchase.archived { opacity:.6; }
+      .archived-tag { font-size:11px; padding:1px 8px; border-radius:999px; border:1px solid var(--line); color:var(--muted); }
+      .contas-head { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+      .contas-head .archived-toggle { display:flex; flex-direction:row; align-items:center; gap:6px; font-size:12.5px; color:var(--muted); margin:0; cursor:pointer; }
+      .contas-head .archived-toggle input { width:auto; margin:0; }
       .purchase.pu-hl { border-color:var(--ember); box-shadow:0 0 0 1px var(--ember), 0 0 22px rgba(255,122,61,.25); }
       .purchase-head { display:flex; align-items:center; gap:10px; }
       .purchase-head strong { flex:1; }

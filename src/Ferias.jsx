@@ -6,8 +6,8 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
    transportes, tarefas automáticas + manuais e custos.
    Tabelas: ver supabase/setup-ferias.sql
    ============================================================ */
-import { feriasApi } from "./api.js";
-import { shareOf, buildLedger, ledgerCell, ledgerNet } from "./ledger.js";
+import { feriasApi, contasApi, isMissingRpc } from "./api.js";
+import { shareOf, buildLedger, ledgerCell, ledgerNet, isFullySettled } from "./ledger.js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -315,11 +315,26 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
   }
 
   async function togglePurchaseSettled(pu, memberId) {
-    const next = { ...pu, settled: { ...(pu.settled || {}), [memberId]: !pu.settled?.[memberId] } };
+    const value = !pu.settled?.[memberId];
+    const settled = { ...(pu.settled || {}), [memberId]: value };
     try {
-      await feriasApi.savePurchase(next);
-      setFd((d) => ({ ...d, purchases: d.purchases.map((x) => (x.id === pu.id ? next : x)) }));
+      /* RPC que só mexe em settled[membro] — não pisa alterações feitas entretanto por outros */
+      try { await contasApi.setSettled("vacation", pu.id, memberId, value); }
+      catch (e) { if (isMissingRpc(e)) await feriasApi.savePurchase({ ...pu, settled }); else throw e; }
+      setFd((d) => ({ ...d, purchases: d.purchases.map((x) => (x.id === pu.id ? { ...x, settled } : x)) }));
     } catch (e) { console.error(e); showToast("Não foi possível atualizar o saldado."); }
+  }
+
+  /* arquivar / desarquivar uma compra saldada (não mexe em valores) */
+  async function setVacPurchaseArchived(pu, value) {
+    try {
+      await contasApi.setArchived("vacation", pu.id, value);
+      setFd((d) => ({ ...d, purchases: d.purchases.map((x) => (x.id === pu.id ? { ...x, archived: value } : x)) }));
+      showToast(value ? "Conta arquivada." : "Conta desarquivada.");
+    } catch (e) {
+      console.error(e);
+      showToast(isMissingRpc(e) ? "Falta correr setup-contas-arquivo.sql no Supabase." : "Não foi possível arquivar.");
+    }
   }
 
   async function claimVacPayment(pu, memberId, value) {
@@ -401,6 +416,7 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onEditPurchase={(id) => setModal({ type: "purchaseForm", id })}
           onToggleSettled={togglePurchaseSettled}
           onClaimPayment={claimVacPayment}
+          onArchivePurchase={fd.archiveReady ? setVacPurchaseArchived : null}
           onStayStatus={(s, st) => setItemStatus("stays", s, st, feriasApi.saveStay)}
           onTransportStatus={(t, st) => setItemStatus("transports", t, st, feriasApi.saveTransport)}
           onToggleAssignee={(task, mid) => toggleAssignee(vac, task, mid)}
@@ -1030,8 +1046,10 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 }
 
 /* ---------- Contas ---------- */
-function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment, jumpPurchase, onJumpConsumed }) {
+function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment, onArchivePurchase, jumpPurchase, onJumpConsumed }) {
   const [view, setView] = useState("compras");   // compras | minhas | gerais
+  /* se se chega para destacar uma conta arquivada, mostra logo as arquivadas */
+  const [showArchived, setShowArchived] = useState(() => !!purchases.find((pu) => pu.id === jumpPurchase)?.archived);
   const [pair, setPair] = useState(null);         // par aberto em detalhe {aId, bId}
   const [detail, setDetail] = useState(null);     // id da compra aberta em detalhe
   const [highlight, setHighlight] = useState(jumpPurchase || null); // compra a destacar na lista
@@ -1128,7 +1146,7 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         if (!pu) return null;
         return (
           <VPurchaseDetailModal pu={pu} members={members} myMember={myMember} isAdmin={isAdmin}
-            onToggleSettled={onToggleSettled} onClaimPayment={onClaimPayment}
+            onToggleSettled={onToggleSettled} onClaimPayment={onClaimPayment} onArchive={onArchivePurchase}
             onEdit={() => { setDetail(null); onEditPurchase(pu.id); }}
             onClose={() => setDetail(null)} />
         );
@@ -1158,7 +1176,13 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
         </>
       )}
       {purchases.length === 0 && suggestions.length === 0 && <p className="empty">Sem contas ainda. Regista compras (voos, alojamento, carrinha…) para dividir pelos participantes.</p>}
-      {purchases.map((pu) => {
+      {purchases.some((pu) => pu.archived) && (
+        <label className="varch-toggle">
+          <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+          Ver contas arquivadas ({purchases.filter((pu) => pu.archived).length})
+        </label>
+      )}
+      {purchases.filter((pu) => showArchived || !pu.archived).map((pu) => {
         const parts = pu.participants || [];
         const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
         const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
@@ -1170,11 +1194,12 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
            Tudo o resto (participantes, parcelas, ações) abre no detalhe. */
         return (
           <div key={pu.id} id={`vpu-${pu.id}`}
-            className={`purchase vpu-row ${highlight === pu.id ? "vpu-hl" : ""}`}
+            className={`purchase vpu-row ${highlight === pu.id ? "vpu-hl" : ""} ${pu.archived ? "varchived" : ""}`}
             onClick={() => setDetail(pu.id)} title="Ver detalhes desta compra">
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               {pu.sourceKey && <span className="vac-chip">{pu.sourceKey.startsWith("stay:") ? "alojamento" : "transporte"}</span>}
+              {pu.archived && <span className="vac-chip">arquivada</span>}
               <span className="purchase-total">{eur(pu.total)}</span>
               {(isAdmin || iAmPayer) && (
                 <button className="iconbtn" title="Editar compra"
@@ -1219,7 +1244,7 @@ function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, place
 /* ---------- Detalhe de uma compra das férias ----------
    Tudo o que saiu do cartão: divisão, parcelas, participantes e as ações
    (marcar "já paguei" / o credor confirmar que recebeu). */
-function VPurchaseDetailModal({ pu, members, myMember, isAdmin, onToggleSettled, onClaimPayment, onEdit, onClose }) {
+function VPurchaseDetailModal({ pu, members, myMember, isAdmin, onToggleSettled, onClaimPayment, onArchive, onEdit, onClose }) {
   const parts = pu.participants || [];
   const isSet = (mid) => mid === pu.payerId || !!pu.settled?.[mid];
   const totalSettled = Math.min(pu.total, Math.round(parts.filter(isSet).reduce((acc, mid) => acc + shareOf(pu, mid), 0) * 100) / 100);
@@ -1299,6 +1324,12 @@ function VPurchaseDetailModal({ pu, members, myMember, isAdmin, onToggleSettled,
       {(isAdmin || iAmPayer) && (
         <div className="actions" style={{ justifyContent: "flex-start" }}>
           <button className="btn ghost" onClick={onEdit}>Editar compra</button>
+          {onArchive && (pu.archived || isFullySettled(pu)) && (
+            <button className="btn ghost" title={pu.archived ? "Voltar a mostrar esta conta na lista" : "Esconder esta conta saldada (não mexe em valores)"}
+              onClick={() => onArchive(pu, !pu.archived)}>
+              {pu.archived ? "Desarquivar" : "Arquivar conta saldada"}
+            </button>
+          )}
         </div>
       )}
     </VModal>
@@ -1987,6 +2018,9 @@ function FeriasStyle() {
 
       /* Compras em modo resumo (o detalhe abre num painel próprio) */
       .vpu-row { cursor: pointer; transition: border-color .15s; gap: 6px; }
+      .vpu-row.varchived { opacity: .6; }
+      .varch-toggle { display: flex; flex-direction: row; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); margin: 0 0 10px; cursor: pointer; }
+      .varch-toggle input { width: auto; margin: 0; }
       .vpu-row:hover { border-color: var(--ember); }
       .vpu-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; color: var(--muted); }
       .vpu-meta b { color: var(--text); font-weight: 600; }

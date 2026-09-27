@@ -42,9 +42,9 @@ const toPurchase = (r) => ({
   settled: r.settled || {}, receipts: r.receipts || [],
   split: r.split || "equal", shares: r.shares || {},
   parcels: r.parcels || [],
-  claimed: r.claimed || {},
+  claimed: r.claimed || {}, archived: !!r.archived,
 });
-/* claimed fica de fora do fromPurchase de propósito: só muda via RPC
+/* claimed e archived ficam de fora do fromPurchase de propósito: só muda via RPC
    claim_my_payment, para o upsert não pisar registos concorrentes. */
 const fromPurchase = (p) => ({
   id: p.id, event_id: p.eventId, description: p.description, total: p.total,
@@ -63,9 +63,37 @@ const toWish = (r) => ({
   year: r.year, message: r.message || "", emailedAt: r.emailed_at || null, createdAt: r.created_at || null,
 });
 
+/* Recibos (pagar várias contas de uma vez) — ver setup-contas-recibos.sql.
+   Nome payReceipts para não confundir com purchases.receipts (faturas anexadas). */
+const toReceipt = (r) => ({
+  id: r.id, fromId: r.from_member_id, toId: r.to_member_id, total: Number(r.total),
+  status: r.status, createdAt: r.created_at, paidAt: r.paid_at || null, confirmedAt: r.confirmed_at || null,
+});
+const toReceiptItem = (r) => ({
+  receiptId: r.receipt_id, origin: r.origin, purchaseId: r.purchase_id, memberId: r.member_id, amount: Number(r.amount),
+});
+const rpc = async (fn, args) => { const { data, error } = await supabase.rpc(fn, args); if (error) throw error; return data; };
+
+/* Escritas cirúrgicas nas contas (eventos e férias) — só por RPC, cada uma mexe
+   num único campo (archived, settled[membro]) ou nos recibos. origin = 'event' | 'vacation'. */
+export const contasApi = {
+  setArchived: (origin, purchaseId, value) => rpc("set_purchase_archived", { p_origin: origin, p_purchase_id: purchaseId, p_value: value }),
+  setSettled: (origin, purchaseId, memberId, value) => rpc("set_purchase_settled", { p_origin: origin, p_purchase_id: purchaseId, p_member: memberId, p_value: value }),
+  createReceipt: (toId, items) => rpc("create_receipt", {
+    p_to: toId,
+    p_items: items.map((it) => ({ origin: it.origin, purchase_id: it.purchaseId, member_id: it.memberId, amount: it.amount })),
+  }),
+  payReceipt: (id) => rpc("pay_receipt", { p_id: id }),
+  confirmReceipt: (id) => rpc("confirm_receipt", { p_id: id }),
+  reopenReceipt: (id) => rpc("reopen_receipt", { p_id: id }),
+  cancelReceipt: (id) => rpc("cancel_receipt", { p_id: id }),
+};
+/* a função RPC ainda não existe no Supabase (migração por correr) */
+export const isMissingRpc = (e) => /PGRST202|Could not find the function|function .* does not exist/i.test(`${e?.code || ""} ${e?.message || ""}`);
+
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins, purchases, profiles, places, wishes, shames] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles, places, wishes, shames, receipts, receiptItems, archivedProbe] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
@@ -75,6 +103,10 @@ export const api = {
       supabase.from("event_places").select("*"),
       supabase.from("birthday_wishes").select("*"),
       supabase.from("debt_shames").select("*"),
+      supabase.from("receipts").select("*"),
+      supabase.from("receipt_items").select("*"),
+      /* só para saber se a coluna archived já existe (setup-contas-arquivo.sql) */
+      supabase.from("purchases").select("archived").limit(1),
     ]);
     for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
@@ -90,6 +122,12 @@ export const api = {
       wishes: wishes.error ? [] : wishes.data.map(toWish),
       /* tolerante: se setup-vergonha.sql ainda não correu, segue sem vergonhas */
       shames: shames.error ? [] : shames.data.map(toShame),
+      /* tolerante: se setup-contas-recibos.sql ainda não correu, segue sem recibos */
+      payReceipts: receipts.error ? [] : receipts.data.map(toReceipt),
+      receiptItems: receiptItems.error ? [] : receiptItems.data.map(toReceiptItem),
+      /* os botões novos só aparecem depois de correr as migrações */
+      archiveReady: !archivedProbe.error,
+      receiptsReady: !receipts.error && !receiptItems.error,
     };
   },
   async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },
@@ -230,9 +268,9 @@ const toVPurchase = (r) => ({
   payerId: r.payer_member_id, participants: r.participants || [],
   settled: r.settled || {}, split: r.split || "equal", shares: r.shares || {},
   sourceKey: r.source_key || null, createdAt: r.created_at || null,
-  parcels: r.parcels || [], claimed: r.claimed || {},
+  parcels: r.parcels || [], claimed: r.claimed || {}, archived: !!r.archived,
 });
-/* claimed fica de fora do fromVPurchase: só muda via RPC claim_my_vacation_payment */
+/* claimed e archived ficam de fora do fromVPurchase: só mudam via RPC (claim_my_vacation_payment, set_purchase_archived) */
 /* created_at fica de fora: é definido pela BD no insert e não deve ser pisado */
 const fromVPurchase = (p) => ({
   id: p.id, vacation_id: p.vacationId, description: p.description, total: p.total,
@@ -260,6 +298,7 @@ export const feriasApi = {
       supabase.from("vacation_purchases").select("*"),
     ]);
     for (const r of [vacations, places, stays, transports, tasks]) if (r.error) throw r.error;
+    const archivedProbe = await supabase.from("vacation_purchases").select("archived").limit(1);
     return {
       vacations: vacations.data.map(toVacation),
       places: places.data.map(toVPlace),
@@ -268,6 +307,7 @@ export const feriasApi = {
       tasks: tasks.data.map(toVTask),
       /* tolerante: se a migração setup-ferias-contas.sql ainda não correu, segue sem contas */
       purchases: purchases.error ? [] : purchases.data.map(toVPurchase),
+      archiveReady: !archivedProbe.error,
     };
   },
   /* só leitura — férias e respetivas compras, para a aba «As Minhas Contas» */
@@ -368,6 +408,7 @@ export const BACKUP_TABLES = [
   "members", "events", "roles", "admins", "purchases", "profiles", "event_places",
   "vacations", "vacation_places", "vacation_stays", "vacation_transports", "vacation_tasks",
   "vacation_purchases", "media_entries", "availabilities", "birthday_wishes", "debt_shames",
+  "receipts", "receipt_items",
 ];
 
 export async function fetchBackup(onProgress) {

@@ -43,7 +43,12 @@ export function buildLedger(purchases) {
   return { owe, pend };
 }
 
-export const ledgerCell = (bag, debtor, creditor) => bag?.[debtor]?.[creditor] || { total: 0, items: [] };
+/* compra totalmente saldada: todos os participantes com parte > 0 (exceto quem pagou) saldados.
+   Igual à regra de purchase_is_settled no Supabase (só estas se podem arquivar). */
+export const isFullySettled = (pu) =>
+  (pu.participants || []).every((mid) => mid === pu.payerId || !!pu.settled?.[mid] || shareOf(pu, mid) <= 0);
+
+export const ledgerCell =(bag, debtor, creditor) => bag?.[debtor]?.[creditor] || { total: 0, items: [] };
 
 /* líquido que `debtor` ainda deve a `creditor` depois de abater o sentido contrário
    (ex.: A deve 1 a B e B deve 2 a A → A→B = 0 e B→A = 1) */
