@@ -846,7 +846,7 @@ export default function App() {
             <MinhasContasTab members={data.members} events={data.events} eventPurchases={data.purchases}
               myMember={myMember} isAdmin={isAdmin} showToast={showToast} onChanged={reloadData}
               receipts={data.payReceipts || []} receiptItems={data.receiptItems || []}
-              archiveReady={!!data.archiveReady} receiptsReady={!!data.receiptsReady}
+              archiveReady={!!data.archiveReady} receiptsReady={!!data.receiptsReady} directReady={!!data.directReady}
               onOpenEvent={(id, purchaseId) => setModal({ type: "eventDetail", id, highlightPurchase: purchaseId })}
               onOpenVacation={(vacationId, purchaseId) => { setFeriasJump({ vacationId, purchaseId }); setTab("ferias"); }} />
           )}

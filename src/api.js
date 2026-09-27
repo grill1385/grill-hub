@@ -68,6 +68,7 @@ const toWish = (r) => ({
 const toReceipt = (r) => ({
   id: r.id, fromId: r.from_member_id, toId: r.to_member_id, total: Number(r.total),
   status: r.status, createdAt: r.created_at, paidAt: r.paid_at || null, confirmedAt: r.confirmed_at || null,
+  kind: r.kind || "recibo", // recibo | direto («já me pagou tudo», validado pelo credor)
 });
 const toReceiptItem = (r) => ({
   receiptId: r.receipt_id, origin: r.origin, purchaseId: r.purchase_id, memberId: r.member_id, amount: Number(r.amount),
@@ -87,13 +88,18 @@ export const contasApi = {
   confirmReceipt: (id) => rpc("confirm_receipt", { p_id: id }),
   reopenReceipt: (id) => rpc("reopen_receipt", { p_id: id }),
   cancelReceipt: (id) => rpc("cancel_receipt", { p_id: id }),
+  /* o credor valida de uma vez tudo o que `fromId` lhe devia (pago fora do GrillHub) */
+  settleAllFrom: (fromId, items) => rpc("settle_all_from", {
+    p_from: fromId,
+    p_items: items.map((it) => ({ origin: it.origin, purchase_id: it.purchaseId, member_id: it.memberId, amount: it.amount })),
+  }),
 };
 /* a função RPC ainda não existe no Supabase (migração por correr) */
 export const isMissingRpc = (e) => /PGRST202|Could not find the function|function .* does not exist/i.test(`${e?.code || ""} ${e?.message || ""}`);
 
 export const api = {
   async loadAll() {
-    const [members, events, roles, admins, purchases, profiles, places, wishes, shames, receipts, receiptItems, archivedProbe] = await Promise.all([
+    const [members, events, roles, admins, purchases, profiles, places, wishes, shames, receipts, receiptItems, archivedProbe, kindProbe] = await Promise.all([
       supabase.from("members").select("*"),
       supabase.from("events").select("*"),
       supabase.from("roles").select("*"),
@@ -107,6 +113,8 @@ export const api = {
       supabase.from("receipt_items").select("*"),
       /* só para saber se a coluna archived já existe (setup-contas-arquivo.sql) */
       supabase.from("purchases").select("archived").limit(1),
+      /* e se a coluna receipts.kind já existe (setup-contas-recibos-direto.sql) */
+      supabase.from("receipts").select("kind").limit(1),
     ]);
     for (const r of [members, events, roles, admins, purchases]) if (r.error) throw r.error;
     return {
@@ -128,6 +136,7 @@ export const api = {
       /* os botões novos só aparecem depois de correr as migrações */
       archiveReady: !archivedProbe.error,
       receiptsReady: !receipts.error && !receiptItems.error,
+      directReady: !receipts.error && !kindProbe.error,
     };
   },
   async saveMembers(list) { const { error } = await supabase.from("members").upsert(list.map(fromMember)); if (error) throw error; },

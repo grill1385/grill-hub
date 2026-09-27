@@ -86,6 +86,17 @@ Testado: SQL em Postgres local (PGlite, 28 verificações, incluindo «os valore
 mudam»); UI de ponta a ponta com PGlite no browser e dados falsos (criar, pagar, reabrir, confirmar,
 cancelar, arquivar, com e sem migração, secretária e telemóvel).
 
+### «Já me pagou tudo» (28 set 2026)
+Para quando alguém paga ao credor por fora (MB Way, dinheiro) sem criar recibo.
+Migração `supabase/setup-contas-recibos-direto.sql` (só adições; depois dos recibos):
+coluna `receipts.kind` ('recibo' por omissão | 'direto') e RPC `settle_all_from(p_from, p_items)`,
+chamada pelo CREDOR: valida as linhas como o `create_receipt` (sentido inverso), recusa se a
+outra pessoa tiver um recibo em aberto para ele, e grava um recibo já 'confirmado' kind 'direto'
+com `settled[devedor]=true` em todas as linhas — o que ela devia (incluindo o que estava «por
+confirmar») e, abatido, o que o credor lhe devia. UI: caixa verde «Já me pagou tudo» no detalhe
+de cada pessoa que te deve (Contas.jsx `settleDraft`/`SettleAllModal`); no histórico dos dois
+aparece como «pago fora do GrillHub». Escondido até à migração (`data.directReady`).
+
 ### Ideias para depois
 - Email ao credor quando um recibo é marcado como pago (Edge Function, como `birthday-wish`).
 - `send-debt-reminders.mjs` podia mencionar recibos em aberto.

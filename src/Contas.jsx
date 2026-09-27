@@ -16,7 +16,9 @@ const norm = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").tri
 const round2 = (n) => Math.round(n * 100) / 100;
 function fmtDate(iso) {
   if (!iso) return "sem data";
-  const [y, m, d] = iso.slice(0, 10).split("-");
+  /* timestamps (recibos) vêm em UTC — mostra o dia na hora local */
+  if (iso.length > 10) return new Date(iso).toLocaleDateString("pt-PT");
+  const [y, m, d] = iso.split("-");
   return `${d}/${m}/${y}`;
 }
 const signed = (v) => (v === 0 ? "0,00 €" : `${v > 0 ? "+" : "−"}${eur(Math.abs(v))}`);
@@ -48,7 +50,7 @@ function myStatus(pu, me) {
 }
 
 export default function MinhasContasTab({ members, events, eventPurchases, myMember, isAdmin, showToast, onChanged,
-  receipts = [], receiptItems = [], archiveReady, receiptsReady, onOpenEvent, onOpenVacation }) {
+  receipts = [], receiptItems = [], archiveReady, receiptsReady, directReady, onOpenEvent, onOpenVacation }) {
   const [vd, setVd] = useState(null);          // {vacations, purchases} das férias
   const [vacErr, setVacErr] = useState(false);
   const [q, setQ] = useState("");
@@ -62,6 +64,7 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
   const [detail, setDetail] = useState(null);  // key da compra aberta em detalhe
   const [receiptOpen, setReceiptOpen] = useState(null); // id do recibo aberto
   const [newReceipt, setNewReceipt] = useState(null);   // id da pessoa para quem se está a criar um recibo
+  const [settleFrom, setSettleFrom] = useState(null);   // id da pessoa que «já me pagou tudo»
   const [busy, setBusy] = useState(false);
 
   const loadVac = () => feriasApi.loadAccounts().then(setVd)
@@ -177,6 +180,19 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
     return { pay, offset, total, open };
   };
 
+  /* «Já me pagou tudo»: o que `otherId` me deve (por saldar ou «por confirmar»)
+     menos o que eu lhe devo — tudo fica saldado de uma vez, validado por mim (credor) */
+  const settleDraft = (otherId) => {
+    const lines = (cell, debtor) => cell.items
+      .filter(({ pu }) => !inOpenReceipt(pu, debtor))
+      .map(({ pu, amount }) => ({ pu, amount, origin: pu.src, purchaseId: pu.id, memberId: debtor }));
+    const paid = [...lines(ledgerCell(fullLedger.owe, otherId, me), otherId), ...lines(ledgerCell(fullLedger.pend, otherId, me), otherId)];
+    const offset = lines(ledgerCell(fullLedger.owe, me, otherId), me);
+    const total = round2(paid.reduce((a, x) => a + x.amount, 0) - offset.reduce((a, x) => a + x.amount, 0));
+    const open = myReceipts.find((r) => r.fromId === otherId && r.toId === me && OPEN.includes(r.status)) || null;
+    return { paid, offset, total, open };
+  };
+
   async function run(action, okMsg) {
     setBusy(true);
     try {
@@ -196,6 +212,12 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
     const d = receiptDraft(otherId);
     const rid = await run(() => contasApi.createReceipt(otherId, [...d.pay, ...d.offset]), (id) => `Recibo ${id} criado.`);
     if (rid) { setNewReceipt(null); setPair(null); setReceiptOpen(rid); }
+  };
+  const settleAll = async (otherId) => {
+    const d = settleDraft(otherId);
+    const rid = await run(() => contasApi.settleAllFrom(otherId, [...d.paid, ...d.offset]),
+      (id) => `Contas com ${nm(otherId)} saldadas — registado como ${id}.`);
+    if (rid) { setSettleFrom(null); setReceiptOpen(rid); }
   };
   const archiveMany = async (list, value) => {
     await run(async () => { for (const pu of list) await contasApi.setArchived(pu.src, pu.id, value); },
@@ -368,10 +390,15 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
 
       {pair && (
         <PairModal ledger={ledger} me={me} otherId={pair} nm={nm} filtersOn={!!filtersOn} receiptsReady={!!receiptsReady}
-          draft={receiptDraft(pair)}
+          draft={receiptDraft(pair)} settle={directReady ? settleDraft(pair) : null}
+          onSettleAll={() => { setSettleFrom(pair); setPair(null); }}
           onNewReceipt={() => { setNewReceipt(pair); setPair(null); }}
           onOpenReceipt={(id) => { setPair(null); setReceiptOpen(id); }}
           onOpen={(key) => { setPair(null); setDetail(key); }} onClose={() => setPair(null)} />
+      )}
+      {settleFrom && (
+        <SettleAllModal draft={settleDraft(settleFrom)} otherName={nm(settleFrom)} busy={busy}
+          onConfirm={() => settleAll(settleFrom)} onClose={() => setSettleFrom(null)} />
       )}
       {newReceipt && (
         <NewReceiptModal draft={receiptDraft(newReceipt)} otherName={nm(newReceipt)} busy={busy}
@@ -446,7 +473,7 @@ function ReceiptCard({ r, me, nm, onOpen }) {
       : <><b>{other}</b> diz que te pagou <b>{eur(r.total)}</b> — confirma se recebeste</>;
     cls = iPay ? "wait" : "todo";
   } else {
-    text = <>{iPay ? `Para ${other}` : `De ${other}`} · <b>{eur(r.total)}</b> · {STATUS_LABEL[r.status]}</>;
+    text = <>{iPay ? `Para ${other}` : `De ${other}`} · <b>{eur(r.total)}</b> · {r.kind === "direto" ? "pago fora do GrillHub" : STATUS_LABEL[r.status]}</>;
     cls = "past";
   }
   return (
@@ -459,7 +486,7 @@ function ReceiptCard({ r, me, nm, onOpen }) {
 }
 
 /* ---------- Eu e outra pessoa: as contas dos dois sentidos ---------- */
-function PairModal({ ledger, me, otherId, nm, filtersOn, receiptsReady, draft, onNewReceipt, onOpenReceipt, onOpen, onClose }) {
+function PairModal({ ledger, me, otherId, nm, filtersOn, receiptsReady, draft, settle, onSettleAll, onNewReceipt, onOpenReceipt, onOpen, onClose }) {
   const iOwe = ledgerCell(ledger.owe, me, otherId);
   const owesMe = ledgerCell(ledger.owe, otherId, me);
   const pendOut = ledgerCell(ledger.pend, me, otherId);
@@ -499,6 +526,18 @@ function PairModal({ ledger, me, otherId, nm, filtersOn, receiptsReady, draft, o
         <div className="mc-receipt-cta">
           <span>Paga tudo o que deves a {name} de uma vez: <b>{eur(draft.total)}</b>{draft.offset.length > 0 ? " (já com o que te deve abatido)" : ""}.</span>
           <button className="btn ember small" onClick={onNewReceipt}>Criar recibo</button>
+        </div>
+      ) : null}
+
+      {!settle ? null : settle.open ? (
+        <div className="mc-receipt-cta">
+          <span>{name} tem o recibo <b>{settle.open.id}</b> para ti ({STATUS_LABEL[settle.open.status]}) — valida-o aí.</span>
+          <button className="btn ghost small" onClick={() => onOpenReceipt(settle.open.id)}>Ver recibo</button>
+        </div>
+      ) : settle.total > 0 && settle.paid.length > 0 ? (
+        <div className="mc-receipt-cta settle">
+          <span>{name} já te pagou tudo por fora (MB Way, dinheiro…)? Valida de uma vez: <b>{eur(settle.total)}</b>{settle.offset.length > 0 ? " (já com o que lhe devias abatido)" : ""}.</span>
+          <button className="btn ember small" onClick={onSettleAll}>Já me pagou tudo</button>
         </div>
       ) : null}
 
@@ -552,6 +591,29 @@ function NewReceiptModal({ draft, otherName, busy, onCreate, onClose }) {
   );
 }
 
+/* ---------- «Já me pagou tudo»: pré-visualizar e validar ---------- */
+function SettleAllModal({ draft, otherName, busy, onConfirm, onClose }) {
+  return (
+    <McModal title={`${otherName} já te pagou tudo`} onClose={onClose}>
+      <p className="hint" style={{ marginTop: 0 }}>
+        Para quando {otherName} te pagou por fora, sem recibo no GrillHub. Todas estas contas ficam saldadas de uma vez
+        {draft.offset.length ? `, incluindo o que devias a ${otherName} (abatido no valor)` : ""}. Fica registado no teu
+        histórico de recibos como «pago fora do GrillHub».
+      </p>
+      <ReceiptLines title={`O que ${otherName} te devia`} lines={draft.paid} sign="" />
+      <ReceiptLines title={`Abatido (o que devias a ${otherName})`} lines={draft.offset} sign="−" />
+      <p className="net-summary">Valor que {otherName} te pagou: <b className="mc-pos">{eur(draft.total)}</b></p>
+      <div className="actions">
+        <button className="btn ghost" onClick={onClose}>Cancelar</button>
+        <button className="btn ember" disabled={busy || draft.total <= 0}
+          onClick={() => { if (window.confirm(`Confirmas que recebeste ${eur(draft.total)} de ${otherName}? Estas contas ficam todas saldadas.`)) onConfirm(); }}>
+          Confirmar que recebi {eur(draft.total)}
+        </button>
+      </div>
+    </McModal>
+  );
+}
+
 /* ---------- Detalhe de um recibo ---------- */
 function ReceiptModal({ r, items, me, nm, byKey, busy, onPay, onConfirm, onReopen, onCancel, onOpenAccount, onClose }) {
   const iPay = r.fromId === me;
@@ -600,7 +662,9 @@ function ReceiptModal({ r, items, me, nm, byKey, busy, onPay, onConfirm, onReope
       <p className="hint">
         {r.status === "aberto" && (iPay ? "Depois de transferires, marca como pago: todas estas contas passam a «por confirmar» de uma vez." : `Quando ${other} pagar e marcar o recibo como pago, recebes aqui o pedido para confirmar.`)}
         {r.status === "pago" && (iPay ? `${other} vai confirmar que recebeu — aí as contas ficam saldadas.` : "Confirma só depois de veres o dinheiro na conta. Todas estas contas ficam saldadas de uma vez.")}
-        {r.status === "confirmado" && `Confirmado a ${fmtDate(r.confirmedAt)} — estas contas foram pagas em conjunto neste recibo.`}
+        {r.status === "confirmado" && (r.kind === "direto"
+          ? `Pago fora do GrillHub e validado por ${iPay ? other : "ti"} a ${fmtDate(r.confirmedAt)} — estas contas ficaram saldadas em conjunto.`
+          : `Confirmado a ${fmtDate(r.confirmedAt)} — estas contas foram pagas em conjunto neste recibo.`)}
         {r.status === "cancelado" && "Recibo cancelado — as contas voltaram a ficar por pagar avulso."}
       </p>
 
@@ -679,7 +743,7 @@ function AccountModal({ pu, me, nm, receiptOfLine, busy, canArchive, canUnarchiv
             {recs.map(({ mid, r }) => (
               <button key={mid} className="mini-item" onClick={() => onOpenReceipt(r.id)}>
                 <span>{label(mid)}<span className="mini-date"> · recibo {r.id}</span></span>
-                <b className="mc-amount">{STATUS_LABEL[r.status]}</b>
+                <b className="mc-amount">{r.kind === "direto" ? "pago fora do GrillHub" : STATUS_LABEL[r.status]}</b>
               </button>
             ))}
           </div>
@@ -771,6 +835,7 @@ function ContasStyle() {
       .mc-receipt-go { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
       .mc-receipt-cta { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap;
         border: 1px solid var(--ember); border-radius: 10px; padding: 10px 12px; margin: 10px 0; background: rgba(255,122,61,.07); font-size: 13.5px; }
+      .mc-receipt-cta.settle { border-color: #7BD389; background: rgba(123,211,137,.07); }
       .mc-receipt-id-box { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 12px 0; padding: 10px 12px;
         border: 1px dashed var(--gold); border-radius: 10px; font-size: 13px; color: var(--muted); }
       .mc-receipt-id-box b { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 18px; color: var(--gold); letter-spacing: .06em; }

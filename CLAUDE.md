@@ -13,7 +13,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - React 18 + Vite, SPA. `src/App.jsx` (componente App + todos os modais; inclui streaks de presença — `streakTier` colore a chama: >=30 violeta rosado, >=10 azul, >=6 vermelho, >=3 laranja, >=1 âmbar), `src/Ferias.jsx` (aba Férias), `src/Media.jsx` (aba Media), `src/Disponibilidade.jsx` (aba Mapa de Disponibilidade), `src/api.js` (todo o acesso ao Supabase — exporta `api`, `feriasApi`, `mediaApi`, `availabilityApi`), `src/main.jsx`.
 - Backend: Supabase (`noperkfdcdairrpnomrs.supabase.co`) — Postgres + Auth (email/password e Google) + Storage (bucket público `grill`) + Edge Functions (`notify-event`, `event-og`, `resolve-maps`).
 - RLS: leitura pública em tudo; escrita só admins (`is_admin()`/`is_main_admin()` sobre o email do JWT), exceto tabelas de férias (escrita também para membros via `is_member()`), e RPCs `update_my_profile`/`set_my_confirmation` para o próprio membro.
-- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`, `setup-contas-parcelas.sql`, `setup-aniversarios.sql`, `setup-vergonha.sql`, `setup-contas-arquivo.sql`, `setup-contas-recibos.sql` (estas duas por esta ordem).
+- Migrações em `supabase/*.sql` — correm-se manualmente no SQL Editor (uma vez cada): `setup-auth.sql`, `setup-perfil-rsvp.sql`, `setup-contas-storage.sql`, `setup-melhorias.sql`, `setup-ferias.sql`, `setup-ferias-confirmacoes.sql`, `setup-ferias-transporte-geral.sql`, `setup-ferias-contas.sql`, `setup-media.sql`, `setup-contas-pagamentos.sql`, `setup-contas-parcelas.sql`, `setup-aniversarios.sql`, `setup-vergonha.sql`, `setup-contas-arquivo.sql`, `setup-contas-recibos.sql`, `setup-contas-recibos-direto.sql` (estas três por esta ordem).
 - GitHub Actions: `deploy.yml` (Pages + `scripts/generate-share-pages.mjs` com sharp), `lembretes.yml` (diário 08:00 UTC: `send-reminders.mjs` 3 dias antes de eventos — só a quem ainda não confirmou presença + `send-debt-reminders.mjs` dívidas; emails via Brevo, secret `BREVO_API_KEY`, sender grillfeup@gmail.com), `keep-alive.yml` (2x/semana ping ao Supabase).
 
 ## Dados (tabelas)
@@ -60,7 +60,8 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Escritas das contas novas só por RPC em `contasApi` (api.js): `setArchived`, `setSettled`, recibos. Confirmar pagamento (App.jsx `toggleSettled`, Ferias.jsx `togglePurchaseSettled`) usa `set_purchase_settled` e só cai para o upsert antigo se a função não existir (`isMissingRpc`).
 - Arquivo (`archived`): só credor/admin, só contas saldadas (`isFullySettled` = `purchase_is_settled` no SQL). Filtro «Ver arquivadas» no detalhe do evento, nas Contas das férias e aqui.
 - Recibos (`receipts`/`receipt_items`, em App: `data.payReceipts`/`data.receiptItems` — não confundir com `purchases.receipts` = faturas): A cria para B com o que lhe deve + o que B lhe deve «a abater» (total = líquido); A marca pago (claimed nas linhas dele); B confirma (settled em todas) ou «não recebi» (reabre). Badge na barra lateral e linha na Home para B.
-- Botões novos escondidos até às migrações: `data.archiveReady`, `data.receiptsReady`, `fd.archiveReady`.
+- «Já me pagou tudo» (credor, no detalhe de quem lhe deve): RPC `settle_all_from` grava um recibo já confirmado com `kind='direto'` e salda tudo entre os dois (incluindo «por confirmar» e, abatido, o que o credor devia).
+- Botões novos escondidos até às migrações: `data.archiveReady`, `data.receiptsReady`, `data.directReady`, `fd.archiveReady`.
 - Cálculos em `src/ledger.js` (`shareOf`, `buildLedger`, `ledgerCell`, `ledgerNet`), partilhado com App.jsx e Ferias.jsx.
 - Filtros (origem, datas = data do evento / início das férias, pesquisa) afetam a lista e os saldos; «Ocultar saldadas» só a lista.
 - Ir à origem: `setModal({type:"eventDetail", id, highlightPurchase})` ou `feriasJump` → `FeriasTab jump` (abre Contas das férias e destaca a compra; o jump é consumido ao montar).
@@ -84,7 +85,7 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - «Envergonha» (jul 2026). Pré-requisito: `setup-vergonha.sql` corrido no SQL Editor — confirmar com o David.
 - Aniversários na Home (jul 2026). Pré-requisitos: `setup-aniversarios.sql` corrido no SQL Editor (se corrido antes da opção de email, só a linha `alter ... emailed_at`) e Edge Function `birthday-wish` criada no painel do Supabase — confirmar com o David.
 - Mapa de Disponibilidade (ago 2026). Pré-requisito: `setup-disponibilidades.sql` corrido no SQL Editor — confirmar com o David.
-- Contas: arquivo + recibos (set 2026). Pré-requisitos: `setup-contas-arquivo.sql` e depois `setup-contas-recibos.sql` corridos no SQL Editor (antes: cópia de segurança) — confirmar com o David. Até lá os botões novos ficam escondidos.
+- Contas: arquivo + recibos (set 2026) — `setup-contas-arquivo.sql` e `setup-contas-recibos.sql` já corridos pelo David (28 set 2026). «Já me pagou tudo»: pré-requisito `setup-contas-recibos-direto.sql` — confirmar com o David. Até lá esse botão fica escondido.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Cópia de segurança (set/2026)
