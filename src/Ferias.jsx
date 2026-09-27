@@ -7,6 +7,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
    Tabelas: ver supabase/setup-ferias.sql
    ============================================================ */
 import { feriasApi } from "./api.js";
+import { shareOf, buildLedger, ledgerCell, ledgerNet } from "./ledger.js";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 
@@ -67,21 +68,6 @@ function statusBlocker(target, links) {
   return null;
 }
 
-const shareOf = (pu, mid) => {
-  if (pu.split === "custom") {
-    if (pu.parcels?.length) {
-      let t = 0;
-      pu.parcels.forEach((pc) => {
-        const ms = pc.members || [];
-        if (ms.length && ms.includes(mid)) t += (Number(pc.price) || 0) / ms.length;
-      });
-      return Math.round(t * 100) / 100;
-    }
-    return Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100;
-  }
-  return pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0;
-};
-
 function pairwiseNet(purchases) {
   const owe = {}; // owe[devedor][credor] = valor
   (purchases || []).forEach((pu) => {
@@ -108,35 +94,6 @@ function pairwiseNet(purchases) {
   }
   return out;
 }
-
-/* Livro-razão das férias: quem deve a quem, compra a compra.
-   `owe` = dívidas por saldar; `pend` = já marcadas "já paguei" à espera de
-   confirmação do credor (não entram nas somas, mostram-se à parte). */
-function vacLedger(purchases) {
-  const owe = {}, pend = {};
-  const add = (bag, debtor, creditor, pu, amount) => {
-    bag[debtor] = bag[debtor] || {};
-    const cell = (bag[debtor][creditor] = bag[debtor][creditor] || { total: 0, items: [] });
-    cell.total = Math.round((cell.total + amount) * 100) / 100;
-    cell.items.push({ pu, amount });
-  };
-  (purchases || []).forEach((pu) => {
-    const payer = pu.payerId;
-    if (!payer) return;
-    (pu.participants || []).forEach((mid) => {
-      if (mid === payer || pu.settled?.[mid]) return;
-      const a = shareOf(pu, mid);
-      if (a <= 0) return;
-      add(pu.claimed?.[mid] ? pend : owe, mid, payer, pu, a);
-    });
-  });
-  return { owe, pend };
-}
-const ledgerCell = (bag, debtor, creditor) => bag?.[debtor]?.[creditor] || { total: 0, items: [] };
-/* líquido que `debtor` ainda deve a `creditor` depois de abater o sentido contrário
-   (ex.: A deve 1 a B e B deve 2 a A → A→B = 0 e B→A = 1) */
-const ledgerNet = (owe, debtor, creditor) =>
-  Math.round((ledgerCell(owe, debtor, creditor).total - ledgerCell(owe, creditor, debtor).total) * 100) / 100;
 
 const placeName = (p) => (p ? p.city + (p.country ? ` (${p.country})` : "") : "?");
 const endName = (placeId, places) => (placeId ? placeName(places.find((p) => p.id === placeId)) : "Casinha");
@@ -274,16 +231,20 @@ function AssigneePills({ assignees, members, canEdit, onToggle }) {
 /* ============================================================
    ABA PRINCIPAL
    ============================================================ */
-export default function FeriasTab({ members, events, myMember, isAdmin, session, showToast }) {
+export default function FeriasTab({ members, events, myMember, isAdmin, session, showToast, jump, onJumpDone }) {
   const canEdit = !!session && (isAdmin || !!myMember);
   const [fd, setFd] = useState(null);   // {vacations, places, stays, transports, tasks}
   const [loadErr, setLoadErr] = useState(false);
-  const [sel, setSel] = useState(null); // id das férias abertas
-  const [sub, setSub] = useState("resumo");
+  /* `jump` = {vacationId, purchaseId} quando se chega de «As Minhas Contas»:
+     abre logo as Contas dessas férias com a compra destacada */
+  const [sel, setSel] = useState(jump?.vacationId || null); // id das férias abertas
+  const [sub, setSub] = useState(jump ? "contas" : "resumo");
+  const [jumpPu, setJumpPu] = useState(jump?.purchaseId || null);
   const [modal, setModal] = useState(null);
 
   useEffect(() => {
     feriasApi.loadAll().then(setFd).catch((e) => { console.error(e); setLoadErr(true); });
+    if (jump) onJumpDone?.();
   }, []);
 
   /* ---------- gravações genéricas ---------- */
@@ -443,7 +404,8 @@ export default function FeriasTab({ members, events, myMember, isAdmin, session,
           onStayStatus={(s, st) => setItemStatus("stays", s, st, feriasApi.saveStay)}
           onTransportStatus={(t, st) => setItemStatus("transports", t, st, feriasApi.saveTransport)}
           onToggleAssignee={(task, mid) => toggleAssignee(vac, task, mid)}
-          onToggleTaskDone={toggleTaskDone} />
+          onToggleTaskDone={toggleTaskDone}
+          jumpPurchase={jumpPu} onJumpConsumed={() => setJumpPu(null)} />
       )}
 
       {/* ---------- Modais ---------- */}
@@ -1068,13 +1030,15 @@ function TransportsView({ canEdit, places, transports, showToast, onAddTransport
 }
 
 /* ---------- Contas ---------- */
-function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment }) {
+function ContasView({ vac, members, canEdit, isAdmin, myMember, purchases, places, stays, transports, onAddPurchase, onEditPurchase, onToggleSettled, onClaimPayment, jumpPurchase, onJumpConsumed }) {
   const [view, setView] = useState("compras");   // compras | minhas | gerais
   const [pair, setPair] = useState(null);         // par aberto em detalhe {aId, bId}
   const [detail, setDetail] = useState(null);     // id da compra aberta em detalhe
-  const [highlight, setHighlight] = useState(null); // compra a destacar na lista
+  const [highlight, setHighlight] = useState(jumpPurchase || null); // compra a destacar na lista
 
-  const ledger = useMemo(() => vacLedger(purchases), [purchases]);
+  useEffect(() => { if (jumpPurchase) onJumpConsumed?.(); }, []);
+
+  const ledger = useMemo(() => buildLedger(purchases), [purchases]);
   /* participantes: os confirmados nas férias + quem aparece nas compras (histórico) */
   const people = useMemo(() => {
     const ids = new Set(members.filter((m) => vac.confirmations?.[m.id]).map((m) => m.id));

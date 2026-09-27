@@ -54,6 +54,14 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - Devedor marca "já paguei" → `claimed[mid]=true` via RPCs `claim_my_payment`/`claim_my_vacation_payment` (só participantes, bloqueado se já saldado). `claimed` fica FORA de fromPurchase/fromVPurchase (só muda via RPC, para upserts não pisarem). Pill tracejada dourada "pagou? por confirmar" (.pill.claim).
 - Credor confirma → settled (upsert normal). **Só o credor** — `canConfirm = iAmPayer && mid !== payerId` em App.jsx e Ferias.jsx; os admins deixaram de poder saldar contas de terceiros na UI (set/2026), para ninguém marcar por engano a conta de outra pessoa. A RLS continua a permitir admin (válvula de manutenção). Devedor com claimed deixa de ser notificado (Home, mailto de lembrete e send-debt-reminders.mjs ignoram claimed); na Home do credor aparece "Pagamentos a confirmar" (secção no painel Contas, botão Confirmar).
 
+## Aba «As Minhas Contas» (src/Contas.jsx, set 2026) — só leitura
+
+- Junta as contas de eventos (`data.purchases`) e de férias (`feriasApi.loadAccounts`) do membro com sessão; só aparece na barra lateral com membro ligado. Nada aqui escreve — «já paguei», confirmar e editar fazem-se na origem.
+- Cálculos em `src/ledger.js` (`shareOf`, `buildLedger`, `ledgerCell`, `ledgerNet`), partilhado com App.jsx e Ferias.jsx.
+- Filtros (origem, datas = data do evento / início das férias, pesquisa) afetam a lista e os saldos; «Ocultar saldadas» só a lista.
+- Ir à origem: `setModal({type:"eventDetail", id, highlightPurchase})` ou `feriasJump` → `FeriasTab jump` (abre Contas das férias e destaca a compra; o jump é consumido ao montar).
+- Plano das fases seguintes: `docs/plano-contas.md`.
+
 ## Aniversários (Home, jul 2026)
 
 - Tabela `birthday_wishes` (member_id = aniversariante, from_member_id, year, message, emailed_at; unique por trio; RLS: leitura pública, membro escreve os seus). Carregada tolerantemente no api.loadAll (`wishes`).

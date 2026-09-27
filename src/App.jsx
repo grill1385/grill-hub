@@ -9,6 +9,8 @@ import React, { useState, useEffect, useMemo, useRef } from "react";
 import { api, supabase, availabilityApi, fetchBackup, BACKUP_TABLES } from "./api.js";
 import * as XLSX from "xlsx";
 import FeriasTab from "./Ferias.jsx";
+import MinhasContasTab from "./Contas.jsx";
+import { shareOf } from "./ledger.js";
 import MediaTab from "./Media.jsx";
 import DisponibilidadeTab, { missingDays as availMissingDays, monthsOf as availMonthsOf, weeksWindow as availWeeksWindow } from "./Disponibilidade.jsx";
 import { CalendarView, EventsMap, EventLocationManager, EventSearch, needsLocation, extractLatLng } from "./EventsExtra.jsx";
@@ -58,21 +60,6 @@ const EMOJI = {
   "100": "💯",
 };
 const emojify = (t) => String(t || "").replace(/:([a-z0-9_+-]+):/gi, (all, name) => EMOJI[norm(name).replace(/-/g, "_")] || all);
-
-const shareOf = (pu, mid) => {
-  if (pu.split === "custom") {
-    if (pu.parcels?.length) {
-      let t = 0;
-      pu.parcels.forEach((pc) => {
-        const ms = pc.members || [];
-        if (ms.length && ms.includes(mid)) t += (Number(pc.price) || 0) / ms.length;
-      });
-      return Math.round(t * 100) / 100;
-    }
-    return Math.round((Number(pu.shares?.[mid]) || 0) * 100) / 100;
-  }
-  return pu.participants?.length ? Math.round((pu.total / pu.participants.length) * 100) / 100 : 0;
-};
 
 /* Compensação de dívidas por pares (líquido).
    Considera só dívidas ainda por saldar e não reclamadas ("já paguei").
@@ -220,6 +207,7 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [session, setSession] = useState(null);
   const [tab, setTab] = useState("home");
+  const [feriasJump, setFeriasJump] = useState(null); // {vacationId, purchaseId} vindo de «As Minhas Contas»
   const [eventView, setEventView] = useState("timeline"); // 'lista' | 'timeline'
   const [eventSort, setEventSort] = useState("desc"); // 'desc' = recentes primeiro
   const [filterYear, setFilterYear] = useState("");
@@ -782,6 +770,7 @@ export default function App() {
         <nav className="sidebar">
           {[
             ["home", "Home"],
+            ...(myMember ? [["contas", "As Minhas Contas", "Contas"]] : []),
             ["eventos", "Eventos"],
             ["disponibilidade", "Mapa de Disponibilidade", "Disponibilidade"],
             ["ferias", "Férias do Grill", "Férias"],
@@ -826,9 +815,17 @@ export default function App() {
               session={session} showToast={showToast} onChanged={loadAvailability} />
           )}
 
+          {tab === "contas" && (
+            <MinhasContasTab members={data.members} events={data.events} eventPurchases={data.purchases}
+              myMember={myMember}
+              onOpenEvent={(id, purchaseId) => setModal({ type: "eventDetail", id, highlightPurchase: purchaseId })}
+              onOpenVacation={(vacationId, purchaseId) => { setFeriasJump({ vacationId, purchaseId }); setTab("ferias"); }} />
+          )}
+
           {tab === "ferias" && (
             <FeriasTab members={data.members} events={data.events} myMember={myMember}
-              isAdmin={isAdmin} session={session} showToast={showToast} />
+              isAdmin={isAdmin} session={session} showToast={showToast}
+              jump={feriasJump} onJumpDone={() => setFeriasJump(null)} />
           )}
 
           {tab === "media" && (
@@ -1070,6 +1067,7 @@ export default function App() {
         if (!ev) return null;
         return <EventDetailModal ev={ev} members={data.members} isAdmin={isAdmin} myMember={myMember}
           purchases={data.purchases.filter((p) => p.eventId === ev.id)}
+          highlightPurchase={modal.highlightPurchase}
           onEdit={() => setModal({ type: "eventForm", id: ev.id })}
           onMember={(id) => setModal({ type: "memberDetail", id })}
           onConfirm={() => toggleConfirmation(ev)}
@@ -1702,8 +1700,17 @@ function NewPasswordModal({ onClose, onDone }) {
   );
 }
 
-function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onDiscordDebts, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
+function EventDetailModal({ ev, members, isAdmin, myMember, purchases, highlightPurchase, onEdit, onMember, onConfirm, onNotify, onDiscordEvent, onDiscordPayment, onDiscordDebts, onShare, onAddPurchase, onEditPurchase, onImportPurchases, onToggleSettled, onClaim, onClose }) {
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
+  /* vindo de «As Minhas Contas»: leva a compra ao centro e destaca-a uns segundos */
+  const [hl, setHl] = useState(highlightPurchase || null);
+  useEffect(() => {
+    if (!hl) return;
+    const el = document.getElementById(`pu-${hl}`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const t = setTimeout(() => setHl(null), 2800);
+    return () => clearTimeout(t);
+  }, [hl]);
   /* saldos compensados: por devedor, a quem e quanto deve pagar */
   const settle = pairwiseNet(purchases);
   const byDebtor = {}; // debtorId -> [{to, amount}]
@@ -1806,7 +1813,7 @@ function EventDetailModal({ ev, members, isAdmin, myMember, purchases, onEdit, o
         const payer = members.find((m) => m.id === pu.payerId);
         const iAmPayer = !!myMember && pu.payerId === myMember.id;
         return (
-          <div key={pu.id} className="purchase">
+          <div key={pu.id} id={`pu-${pu.id}`} className={`purchase ${hl === pu.id ? "pu-hl" : ""}`}>
             <div className="purchase-head">
               <strong>{pu.description}</strong>
               <span className="purchase-total">{eur(pu.total)}</span>
@@ -2956,6 +2963,7 @@ function Style() {
 
       .badge { background:var(--ember); color:#1A0F08; border-radius:10px; font-size:11px; font-weight:700; padding:1px 7px; margin-left:8px; }
       .purchase { background:var(--surface2); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:10px; display:flex; flex-direction:column; gap:8px; }
+      .purchase.pu-hl { border-color:var(--ember); box-shadow:0 0 0 1px var(--ember), 0 0 22px rgba(255,122,61,.25); }
       .purchase-head { display:flex; align-items:center; gap:10px; }
       .purchase-head strong { flex:1; }
       .purchase-total { color:var(--gold); font-weight:700; }

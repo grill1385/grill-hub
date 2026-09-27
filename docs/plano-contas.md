@@ -32,12 +32,20 @@ Sem qualquer escrita nova na base de dados (a única operação nova é um `sele
 Ponto em aberto: se o credor de alguma compra antiga não tiver conta ligada a um membro,
 ninguém a consegue confirmar pela interface. Verificar com o David.
 
-### Fase 2 — aba «As Minhas Contas» (feature 0). Só leitura.
-Junta as contas de eventos (`purchases`) e de férias (`vacation_purchases`) do membro com
-sessão iniciada. Filtros por data e por evento/férias, pesquisa por nome da conta ou do
-evento, ocultar saldadas, saldo com cada pessoa (verde a receber, vermelho a pagar, branco
-a zero). Clicar abre a conta e o evento/férias de origem.
-Reaproveitar `vacLedger`/`ledgerCell`/`ledgerNet` de Ferias.jsx, generalizados às duas origens.
+### Fase 2 — aba «As Minhas Contas» (feature 0). FEITA (27 set 2026). Só leitura.
+Única operação nova: `feriasApi.loadAccounts()` (dois `select`: `vacations` e `vacation_purchases`).
+
+- `src/ledger.js`: `shareOf`, `buildLedger` (antigo `vacLedger`), `ledgerCell`, `ledgerNet` —
+  partilhados por App.jsx, Ferias.jsx e Contas.jsx (as cópias locais foram removidas).
+- `src/Contas.jsx` (aba «As Minhas Contas», na barra lateral só com membro ligado): totais
+  a receber / a pagar / por confirmar; filtros por origem (eventos, férias, ou um evento/férias
+  concreto), por data (data do evento ou do início das férias) e pesquisa sem acentos na conta
+  e na origem; tabela «Saldo com cada pessoa» (verde/vermelho/branco, «por confirmar» à parte)
+  → `PairModal`; lista das contas com «Ocultar saldadas» (ligado por omissão) → `AccountModal`
+  só de leitura com botão para a origem.
+- Ir à origem: evento → `EventDetailModal` com `highlightPurchase` (`pu-<id>` + `.pu-hl`);
+  férias → `FeriasTab` com `jump={vacationId, purchaseId}`, abre Contas e destaca `vpu-<id>`.
+- Testado com dados falsos (página local com o Supabase bloqueado), secretária e telemóvel.
 
 ### Fase 3 — arquivar contas saldadas (feature 4). Migração só de adição.
 `alter table ... add column if not exists archived boolean not null default false` em

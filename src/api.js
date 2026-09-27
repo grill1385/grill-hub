@@ -270,6 +270,19 @@ export const feriasApi = {
       purchases: purchases.error ? [] : purchases.data.map(toVPurchase),
     };
   },
+  /* só leitura — férias e respetivas compras, para a aba «As Minhas Contas» */
+  async loadAccounts() {
+    const [vacations, purchases] = await Promise.all([
+      supabase.from("vacations").select("*"),
+      supabase.from("vacation_purchases").select("*"),
+    ]);
+    if (vacations.error) throw vacations.error;
+    return {
+      vacations: vacations.data.map(toVacation),
+      /* tolerante, como no loadAll: sem a migração das contas das férias segue só com eventos */
+      purchases: purchases.error ? [] : purchases.data.map(toVPurchase),
+    };
+  },
   async saveVacation(v) { const { error } = await supabase.from("vacations").upsert(fromVacation(v)); if (error) throw error; },
   /* o próprio membro confirma/desconfirma a sua participação (RPC; ver setup-ferias-confirmacoes.sql) */
   async setMyVacationConfirmation(vacationId, value) {
