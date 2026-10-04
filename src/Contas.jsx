@@ -29,8 +29,10 @@ const STATUS_LABEL = { aberto: "por pagar", pago: "pago, por confirmar", confirm
 
 /* A minha situação numa compra.
    - fui eu que paguei: quanto falta receber e quanto está «por confirmar»
-   - sou participante: a minha parte e se está por pagar / por confirmar / saldada */
-function myStatus(pu, me) {
+   - sou participante: a minha parte e se está por pagar / por confirmar / saldada
+   `paidReceiptOf(pu, mid)` devolve o recibo com estado «pago» onde está essa linha (ou null):
+   essas linhas contam como «por confirmar», incluindo as abatidas, que não têm claimed. */
+function myStatus(pu, me, paidReceiptOf) {
   const parts = pu.participants || [];
   if (pu.payerId === me) {
     let toReceive = 0, pending = 0;
@@ -38,15 +40,18 @@ function myStatus(pu, me) {
       if (mid === me || pu.settled?.[mid]) return;
       const a = shareOf(pu, mid);
       if (a <= 0) return;
-      if (pu.claimed?.[mid]) pending += a; else toReceive += a;
+      if (pu.claimed?.[mid] || paidReceiptOf?.(pu, mid)) pending += a; else toReceive += a;
     });
     toReceive = round2(toReceive); pending = round2(pending);
     return { role: "payer", toReceive, pending, done: toReceive === 0 && pending === 0 };
   }
   const share = shareOf(pu, me);
   const settled = share <= 0 || !!pu.settled?.[me];
-  const claimed = !settled && !!pu.claimed?.[me];
-  return { role: "debtor", share, settled, claimed, done: settled };
+  const rec = settled ? null : paidReceiptOf?.(pu, me);
+  const claimed = !settled && (!!pu.claimed?.[me] || !!rec);
+  /* abatida = a minha parte entra «a abater» num recibo pago por outra pessoa a mim */
+  const offset = !!rec && rec.fromId !== me && !pu.claimed?.[me];
+  return { role: "debtor", share, settled, claimed, offset, done: settled };
 }
 
 export default function MinhasContasTab({ members, events, eventPurchases, myMember, isAdmin, showToast, onChanged,
@@ -74,6 +79,27 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
   const me = myMember?.id || null;
   const nm = (id) => members.find((m) => m.id === id)?.name || "?";
 
+  /* em que recibo está cada linha (o mais recente que não esteja cancelado) */
+  const receiptOfLine = useMemo(() => {
+    const byId = new Map(receipts.filter((r) => r.status !== "cancelado").map((r) => [r.id, r]));
+    const map = new Map();
+    receiptItems.forEach((it) => {
+      const r = byId.get(it.receiptId);
+      if (!r) return;
+      const k = itemKey(it.origin, it.purchaseId, it.memberId);
+      /* uma linha pode ter recibos antigos confirmados e um em aberto — mostra o mais recente */
+      if (!map.has(k) || (map.get(k).createdAt || "") < (r.createdAt || "")) map.set(k, r);
+    });
+    return map;
+  }, [receipts, receiptItems]);
+  const inOpenReceipt = (pu, memberId) => OPEN.includes(receiptOfLine.get(itemKey(pu.src, pu.id, memberId))?.status);
+  /* recibo «pago» (à espera do credor) onde está a linha — nos dois sentidos: as linhas de quem
+     pagou têm claimed, mas as abatidas não; ambas contam como «por confirmar» até à confirmação */
+  const paidReceiptOf = useMemo(() => (pu, memberId) => {
+    const r = receiptOfLine.get(itemKey(pu.src, pu.id, memberId));
+    return r?.status === "pago" ? r : null;
+  }, [receiptOfLine]);
+
   /* todas as compras em que entro (como credor ou participante), com a origem anexada */
   const mine = useMemo(() => {
     if (!me || !vd) return [];
@@ -89,9 +115,9 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
       out.push({ ...pu, key: `vacation:${pu.id}`, src: "vacation", srcId: pu.vacationId, srcName: vac?.name || "Férias apagadas", date: vac?.dateStart || null });
     });
     return out
-      .map((pu) => ({ ...pu, st: myStatus(pu, me) }))
+      .map((pu) => ({ ...pu, st: myStatus(pu, me, paidReceiptOf) }))
       .sort((a, b) => (b.date || "").localeCompare(a.date || "") || a.description.localeCompare(b.description));
-  }, [me, vd, eventPurchases, events]);
+  }, [me, vd, eventPurchases, events, paidReceiptOf]);
   const byKey = useMemo(() => new Map(mine.map((pu) => [pu.key, pu])), [mine]);
 
   /* recibos: os meus (a pagar ou a receber) e em que recibo está cada linha */
@@ -101,19 +127,6 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
     [receipts, me]
   );
   const itemsOf = (rid) => receiptItems.filter((it) => it.receiptId === rid);
-  const receiptOfLine = useMemo(() => {
-    const byId = new Map(receipts.filter((r) => r.status !== "cancelado").map((r) => [r.id, r]));
-    const map = new Map();
-    receiptItems.forEach((it) => {
-      const r = byId.get(it.receiptId);
-      if (!r) return;
-      const k = itemKey(it.origin, it.purchaseId, it.memberId);
-      /* uma linha pode ter recibos antigos confirmados e um em aberto — mostra o mais recente */
-      if (!map.has(k) || (map.get(k).createdAt || "") < (r.createdAt || "")) map.set(k, r);
-    });
-    return map;
-  }, [receipts, receiptItems]);
-  const inOpenReceipt = (pu, memberId) => OPEN.includes(receiptOfLine.get(itemKey(pu.src, pu.id, memberId))?.status);
 
   /* origens onde tenho contas, para o filtro */
   const origins = useMemo(() => {
@@ -145,9 +158,9 @@ export default function MinhasContasTab({ members, events, eventPurchases, myMem
   const toArchive = scoped.filter((pu) => canArchive(pu) && pu.payerId === me);
 
   /* saldo com cada pessoa (dívidas dos dois sentidos abatidas) */
-  const ledger = useMemo(() => buildLedger(scoped), [scoped]);
+  const ledger = useMemo(() => buildLedger(scoped, paidReceiptOf), [scoped, paidReceiptOf]);
   /* os recibos usam sempre TODAS as contas entre os dois, ignorando os filtros */
-  const fullLedger = useMemo(() => buildLedger(mine), [mine]);
+  const fullLedger = useMemo(() => buildLedger(mine, paidReceiptOf), [mine, paidReceiptOf]);
   const rows = useMemo(() => {
     if (!me) return [];
     const ids = new Set();
@@ -441,6 +454,7 @@ function StatusLine({ st, payerName }) {
     );
   }
   if (st.settled) return <span className="mc-st done">{st.share > 0 ? `a tua parte ${eur(st.share)} · saldada` : "sem parte tua"}</span>;
+  if (st.offset) return <span className="mc-st"><span className="mc-claim">a tua parte {eur(st.share)} abatida no recibo · por confirmar</span></span>;
   if (st.claimed) return <span className="mc-st"><span className="mc-claim">pagaste {eur(st.share)} a {payerName} · por confirmar</span></span>;
   return <span className="mc-st neg">deves <b>{eur(st.share)}</b> a {payerName}</span>;
 }
@@ -545,10 +559,13 @@ function PairModal({ ledger, me, otherId, nm, filtersOn, receiptsReady, draft, s
       {block(`${name} deve-te`, owesMe)}
       {(pendOut.items.length > 0 || pendIn.items.length > 0) && (
         <>
-          <h4>Já pagos, à espera de confirmação</h4>
-          <p className="hint" style={{ marginTop: 0 }}>Não entram nas somas acima. Quem recebeu confirma no recibo, no evento ou nas férias de origem.</p>
-          {block(`Pagaste a ${name}`, pendOut)}
-          {block(`${name} pagou-te`, pendIn)}
+          <h4>À espera de confirmação</h4>
+          <p className="hint" style={{ marginTop: 0 }}>
+            Não entram nas somas acima: «já paguei» por confirmar e linhas de recibos pagos (incluindo as abatidas).
+            Quem recebeu confirma no recibo, no evento ou nas férias de origem.
+          </p>
+          {block(`Da tua parte para ${name}`, pendOut)}
+          {block(`Da parte de ${name} para ti`, pendIn)}
         </>
       )}
     </McModal>

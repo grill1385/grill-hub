@@ -21,8 +21,10 @@ export const shareOf = (pu, mid) => {
 
 /* Quem deve a quem, compra a compra — serve para compras de eventos e de férias.
    `owe` = dívidas por saldar; `pend` = já marcadas "já paguei" à espera de
-   confirmação do credor (não entram nas somas, mostram-se à parte). */
-export function buildLedger(purchases) {
+   confirmação do credor (não entram nas somas, mostram-se à parte).
+   `isPending(pu, mid)` (opcional) marca mais linhas como «por confirmar» — p.ex. as de um
+   recibo pago, incluindo as abatidas, que não têm claimed porque o devedor delas não pagou nada. */
+export function buildLedger(purchases, isPending) {
   const owe = {}, pend = {};
   const add = (bag, debtor, creditor, pu, amount) => {
     bag[debtor] = bag[debtor] || {};
@@ -37,7 +39,7 @@ export function buildLedger(purchases) {
       if (mid === payer || pu.settled?.[mid]) return;
       const a = shareOf(pu, mid);
       if (a <= 0) return;
-      add(pu.claimed?.[mid] ? pend : owe, mid, payer, pu, a);
+      add(pu.claimed?.[mid] || isPending?.(pu, mid) ? pend : owe, mid, payer, pu, a);
     });
   });
   return { owe, pend };
