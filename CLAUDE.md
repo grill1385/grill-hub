@@ -85,7 +85,8 @@ Plataforma do grupo de amigos "Grill" (David / grill1385): eventos, presenças, 
 - «Envergonha» (jul 2026). Pré-requisito: `setup-vergonha.sql` corrido no SQL Editor — confirmar com o David.
 - Aniversários na Home (jul 2026). Pré-requisitos: `setup-aniversarios.sql` corrido no SQL Editor (se corrido antes da opção de email, só a linha `alter ... emailed_at`) e Edge Function `birthday-wish` criada no painel do Supabase — confirmar com o David.
 - Mapa de Disponibilidade (ago 2026). Pré-requisito: `setup-disponibilidades.sql` corrido no SQL Editor — confirmar com o David.
-- Contas: arquivo + recibos (set 2026) — `setup-contas-arquivo.sql` e `setup-contas-recibos.sql` já corridos pelo David (28 set 2026). «Já me pagou tudo»: pré-requisito `setup-contas-recibos-direto.sql` — confirmar com o David. Até lá esse botão fica escondido.
+- Contas: arquivo + recibos (set 2026) — `setup-contas-arquivo.sql` e `setup-contas-recibos.sql` já corridos pelo David (28 set 2026). «Já me pagou tudo»: `setup-contas-recibos-direto.sql` também já corrido (28 set 2026).
+- Linhas de recibos «pagos» contam como «por confirmar» só em «As Minhas Contas» (`buildLedger(purchases, isPending)` + `paidReceiptOf` em Contas.jsx). Home e Férias › Contas ainda não leem recibos — lá as linhas abatidas de um recibo pago contam como dívida até à confirmação.
 - As 3 férias antigas existem como eventos normais; o David vai registá-las também nas Férias só para histórico. As férias de 2026 (destino: Balcãs) estão em planeamento ativo.
 
 ## Cópia de segurança (set/2026)
